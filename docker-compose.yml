@@ -1,0 +1,68 @@
+# Docker Compose for local development and testing
+version: "3.9"
+
+services:
+  # Main ShotGraph API service
+  shotgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - EXECUTION_PROFILE=debug_cpu
+      - GPU_ENABLED=false
+      - LLM_PROVIDER=${LLM_PROVIDER:-together}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-mistralai/Mistral-7B-Instruct-v0.3}
+      - LLM_PARALLEL=false
+      - STORAGE_PATH=/app/output
+      - ASSETS_PATH=/app/assets
+      - MAX_RETRIES=2
+    volumes:
+      - ./output:/app/output
+      - ./assets:/app/assets
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # GPU-enabled service (requires nvidia-docker)
+  shotgraph-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - EXECUTION_PROFILE=prod_gpu
+      - GPU_ENABLED=true
+      - LLM_PROVIDER=${LLM_PROVIDER:-together}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-mistralai/Mistral-7B-Instruct-v0.3}
+      - LLM_PARALLEL=true
+      - STORAGE_PATH=/app/output
+      - ASSETS_PATH=/app/assets
+    volumes:
+      - ./output:/app/output
+      - ./assets:/app/assets
+      - ./models:/app/models:ro  # Mount model weights
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - gpu
+    restart: unless-stopped
+
+# Volumes for persistent storage
+volumes:
+  output:
+  assets:
+  models:

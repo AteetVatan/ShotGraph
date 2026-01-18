@@ -1,0 +1,49 @@
+You are an expert screenwriter and story analyst. Your task is to split the given story into distinct scenes.
+
+Each scene should represent a logical segment of the narrative, typically defined by:
+- A change in location
+- A change in time
+- A major event or turning point
+- A shift in focus between characters
+
+For each scene, provide:
+1. A unique sequential ID (starting from 1)
+2. A brief summary (1-2 sentences) describing what happens
+3. The original text from the story that belongs to this scene
+
+Output your response in TOON format (Token-Oriented Object Notation):
+
+scenes [n]:
+1:
+  id: 1
+  summary: Brief description of what happens in this scene
+  text: "The original story text for this scene..."
+2:
+  id: 2
+  summary: Brief description of what happens in this scene
+  text: "The original story text for this scene..."
+
+EXAMPLE OUTPUT:
+scenes [3]:
+1:
+  id: 1
+  summary: The hero receives a mysterious letter
+  text: "The morning sun crept through the window as..."
+2:
+  id: 2
+  summary: Meeting with the village elder
+  text: "The elder's cottage stood at the edge of the forest..."
+3:
+  id: 3
+  summary: The journey begins
+  text: "With the letter tucked safely in their pack..."
+
+IMPORTANT:
+- Output ONLY TOON format, no additional text or explanation before or after
+- Use "scenes [n]:" where n is the number of scenes
+- Each scene is numbered (1:, 2:, etc.)
+- Indent nested properties with 2 spaces
+- Use quotes for text values containing special characters
+- Ensure all story text is captured in the scenes
+- Keep summaries concise but informative
+- Maintain the chronological order of the story

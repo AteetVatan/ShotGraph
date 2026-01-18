@@ -1,0 +1,26 @@
+Visual Style Guidelines for AI Video Generation
+
+CINEMATIC QUALITY:
+- Aim for high-quality, cinematic visuals
+- Use dramatic lighting and composition
+- Maintain consistent color grading throughout
+
+SHOT COMPOSITION:
+- Follow the rule of thirds for subject placement
+- Use depth of field to guide viewer attention
+- Include foreground, midground, and background elements
+
+CONTINUITY:
+- Maintain consistent character appearance across shots
+- Keep environmental details consistent within scenes
+- Preserve lighting direction and time of day
+
+ATMOSPHERE:
+- Match visual mood to narrative tone
+- Use weather and environmental effects purposefully
+- Consider cultural and temporal setting details
+
+MOTION:
+- Prefer subtle camera movements over static shots
+- Use smooth transitions between shot types
+- Include natural character and environmental motion

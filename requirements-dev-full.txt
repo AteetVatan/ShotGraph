@@ -1,0 +1,35 @@
+# Requirements for debugging with full dependencies (CPU-only PyTorch)
+# Use this file if you want all dependencies installed but with CPU-only PyTorch
+# for debugging on systems without GPU.
+
+# IMPORTANT: Install CPU-only PyTorch first:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Then install remaining dependencies: pip install -r requirements-dev-full.txt
+
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+httpx>=0.26.0
+moviepy>=1.0.3
+pillow>=10.2.0
+# torch>=2.1.0  # Install CPU-only version separately: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+diffusers>=0.25.0
+transformers>=4.37.0
+accelerate>=0.26.0
+# xformers>=0.0.23  # Optional: GPU optimization library, not needed for CPU-only debug mode
+# Install after PyTorch if needed: pip install xformers
+# Music generation uses HuggingFace transformers (MusicgenForConditionalGeneration)
+# which is compatible with newer PyTorch versions (2.9.1+).
+# Debug mode uses MockMusicGenerator, so music generation is optional for development.
+scipy>=1.11.0  # Required for audio file writing (WAV format)
+edge-tts>=6.1.0  # Cloud-based TTS, works on both CPU and GPU (processing on Microsoft servers)
+# Security
+slowapi>=0.1.9
+# NLP
+spacy>=3.7.0
+tiktoken>=0.5.0
+# Video Effects
+opencv-python>=4.8.0
+# TOON Format
+toons>=0.1.0
