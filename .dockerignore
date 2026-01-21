@@ -66,3 +66,37 @@ temp/
 
 # Plan files
 .cursor/
+
+# Production exclusions
+*.md
+!README.md
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+*.tmp
+
+# Environment files (use env_file in compose)
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Development files
+main_debug.py
+docs/
+*.pdf
+
+# Docker files (don't need in image)
+docker-compose.yml
+docker-compose.*.yml
+!docker-compose.prod.yml
+Dockerfile.dev
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/

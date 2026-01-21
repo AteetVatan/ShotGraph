@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # LLM Configuration
     llm_provider: str = Field(
         default="together",
-        description="LLM provider (together, groq, local)",
+        description="LLM provider (together, local)",
     )
     llm_api_key: str = Field(default="", description="LLM API key")
     llm_model: str = Field(
@@ -47,27 +47,72 @@ class Settings(BaseSettings):
         default="https://api.together.xyz/v1",
         description="Together.ai API base URL",
     )
-    llm_groq_base_url: str = Field(
-        default="https://api.groq.com/openai/v1",
-        description="Groq API base URL",
-    )
     llm_together_timeout: float = Field(
         default=120.0,
         ge=1.0,
         le=600.0,
         description="Together.ai API request timeout in seconds",
     )
-    llm_groq_timeout: float = Field(
-        default=60.0,
-        ge=1.0,
-        le=600.0,
-        description="Groq API request timeout in seconds",
-    )
     llm_max_tokens: int = Field(
         default=4096,
         ge=256,
         le=32768,
         description="Maximum tokens for LLM responses",
+    )
+
+    # Per-Stage Model Configuration (Cost-Optimized Routing)
+    # Step A - Story compression/beat extraction (cheapest)
+    llm_model_story_compress: str = Field(
+        default="google/gemma-3n-E4B-it",
+        description="Model for story compression (Step A) - $0.02/$0.04 per 1M tokens",
+    )
+    llm_model_story_compress_fallback: str = Field(
+        default="meta-llama/Llama-3.2-3B-Instruct-Turbo",
+        description="Fallback for Step A - $0.06/$0.06 per 1M tokens",
+    )
+
+    # Step B - Scene breakdown draft (output-heavy, keep output cheap)
+    llm_model_scene_draft: str = Field(
+        default="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        description="Model for scene breakdown (Step B) - $0.18/$0.18 per 1M tokens",
+    )
+    llm_model_scene_draft_large: str = Field(
+        default="meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        description="Large context model for Step B (when needed) - $0.18/$0.59 per 1M tokens",
+    )
+
+    # Step C - Shot plan finalization (input can get big)
+    llm_model_shot_final: str = Field(
+        default="meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+        description="Model for shot planning (Step C) - $0.27/$0.85 per 1M tokens",
+    )
+    llm_model_shot_final_fallback: str = Field(
+        default="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        description="Fallback for Step C (hard cases) - $0.88/$0.88 per 1M tokens",
+    )
+
+    # Step D - JSON validation/repair (small + structured outputs)
+    llm_model_json_repair: str = Field(
+        default="meta-llama/Llama-3.2-3B-Instruct-Turbo",
+        description="Model for JSON validation/repair (Step D) - $0.06/$0.06 per 1M tokens",
+    )
+
+    # Safety/moderation
+    llm_safety_model: str = Field(
+        default="meta-llama/Llama-Guard-4-12B",
+        description="Safety/moderation model",
+    )
+
+    # Cost control thresholds
+    llm_skip_summarization_threshold: int = Field(
+        default=2000,
+        ge=0,
+        description="Skip NLP summarization if story < N tokens (saves LLM cost)",
+    )
+    llm_use_large_context_threshold: int = Field(
+        default=8000,
+        ge=0,
+        description="Use large context model if input > N tokens",
     )
 
     # Video Generation
@@ -174,8 +219,8 @@ class Settings(BaseSettings):
 
     # Experimental Features
     use_toon_format: bool = Field(
-        default=False,
-        description="Use TOON format for LLM communication (experimental)",
+        default=True,
+        description="Use TOON format for LLM communication (saves ~40% tokens)",
     )
 
     # Security

@@ -105,13 +105,14 @@ class VideoEditor:
         logger.info("Composing video from %d clips", len(video_clips))
 
         try:
-            from moviepy.editor import (
+            from moviepy import (
                 AudioFileClip,
                 CompositeAudioClip,
                 VideoFileClip,
                 concatenate_videoclips,
-                vfx,
             )
+            from moviepy.video.fx import FadeIn, FadeOut
+            from moviepy.audio.fx import AudioLoop
 
             clips = []
             total_duration = 0.0
@@ -158,9 +159,9 @@ class VideoEditor:
                     processed_clips = []
                     for i, clip in enumerate(clips):
                         if i > 0:
-                            clip = clip.fx(vfx.fadein, fade_duration)
+                            clip = clip.fx(FadeIn, fade_duration)
                         if i < len(clips) - 1:
-                            clip = clip.fx(vfx.fadeout, fade_duration)
+                            clip = clip.fx(FadeOut, fade_duration)
                         processed_clips.append(clip)
                     clips = processed_clips
 
@@ -183,7 +184,7 @@ class VideoEditor:
                 music = AudioFileClip(str(music_track))
                 # Loop music if shorter than video
                 if music.duration < final_video.duration:
-                    music = music.fx(vfx.loop, duration=final_video.duration)
+                    music = music.fx(AudioLoop, duration=final_video.duration)
                 else:
                     music = music.subclip(0, final_video.duration)
                 music_audio = music
@@ -251,7 +252,8 @@ class VideoEditor:
         Returns:
             Combined audio clip with crossfaded music.
         """
-        from moviepy.editor import AudioFileClip, CompositeAudioClip, concatenate_audioclips
+        from moviepy import AudioFileClip, CompositeAudioClip, concatenate_audioclips
+        from moviepy.audio.fx import AudioLoop
 
         if not scene_tracks:
             return None
@@ -273,8 +275,7 @@ class VideoEditor:
                 # Loop or trim to fit scene duration
                 if audio.duration < scene_duration:
                     # Loop the music
-                    from moviepy.editor import vfx
-                    audio = audio.fx(vfx.loop, duration=scene_duration)
+                    audio = audio.fx(AudioLoop, duration=scene_duration)
                 else:
                     audio = audio.subclip(0, scene_duration)
 
@@ -396,7 +397,8 @@ class VideoEditor:
         Returns:
             List of clips with interpolated transitions inserted.
         """
-        from moviepy.editor import ImageSequenceClip, concatenate_videoclips, vfx
+        from moviepy import ImageSequenceClip, concatenate_videoclips
+        from moviepy.video.fx import FadeIn, FadeOut
 
         effects = self._get_video_effects()
         num_interp_frames = self._settings.video_interpolation_frames
@@ -406,9 +408,9 @@ class VideoEditor:
         for i, clip in enumerate(clips):
             # Add fade transitions as well
             if i > 0:
-                clip = clip.fx(vfx.fadein, transition_duration / 2)
+                clip = clip.fx(FadeIn, transition_duration / 2)
             if i < len(clips) - 1:
-                clip = clip.fx(vfx.fadeout, transition_duration / 2)
+                clip = clip.fx(FadeOut, transition_duration / 2)
             
             result_clips.append(clip)
             
@@ -454,7 +456,7 @@ class VideoEditor:
         Returns:
             Video clip with subtitles.
         """
-        from moviepy.editor import CompositeVideoClip, TextClip
+        from moviepy import CompositeVideoClip, TextClip
 
         subtitle_clips = []
 
@@ -495,7 +497,7 @@ class VideoEditor:
             Path to the extracted frame image.
         """
         try:
-            from moviepy.editor import VideoFileClip
+            from moviepy import VideoFileClip
             from PIL import Image
 
             clip = VideoFileClip(str(video_path))
@@ -518,7 +520,7 @@ class VideoEditor:
             Duration in seconds.
         """
         try:
-            from moviepy.editor import VideoFileClip
+            from moviepy import VideoFileClip
 
             clip = VideoFileClip(str(video_path))
             duration = clip.duration

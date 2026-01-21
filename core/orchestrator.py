@@ -9,13 +9,15 @@ from typing import TYPE_CHECKING
 from core.models import JobStatus, ProcessedStory, SceneList, StoryInput, VideoJob
 
 if TYPE_CHECKING:
-    from config.settings import Settings
+    from config.settings import Settings, ExecutionProfile
     from core.agents.audio_tts import TTSAgent
+    from core.agents.json_repair import JSONRepairAgent
     from core.agents.music_generator import MusicAgent
     from core.agents.scene_splitter import SceneSplitterAgent
     from core.agents.shot_planner import ShotPlannerAgent
     from core.agents.video_compositor import VideoCompositorAgent
     from core.agents.video_generator import VideoGenerationAgent
+    from core.services.model_router import ModelRouter
     from core.services.nlp import StoryPreprocessor
     from core.services.style_context import StyleContextManager
 
@@ -48,6 +50,8 @@ class VideoGenerationPipeline:
         compositor: "VideoCompositorAgent",
         nlp_processor: "StoryPreprocessor | None" = None,
         style_context_manager: "StyleContextManager | None" = None,
+        json_repair_agent: "JSONRepairAgent | None" = None,
+        model_router: "ModelRouter | None" = None,
     ):
         """Initialize the pipeline with all required agents.
 
@@ -61,6 +65,8 @@ class VideoGenerationPipeline:
             compositor: Agent for composing final video.
             nlp_processor: Optional NLP processor for story preprocessing.
             style_context_manager: Optional style context for visual consistency.
+            json_repair_agent: Optional JSON repair agent for fixing malformed responses.
+            model_router: Optional model router for cost tracking and safety checks.
         """
         self._settings = settings
         self._scene_splitter = scene_splitter
@@ -71,6 +77,8 @@ class VideoGenerationPipeline:
         self._compositor = compositor
         self._nlp_processor = nlp_processor
         self._style_ctx = style_context_manager
+        self._json_repair = json_repair_agent
+        self._model_router = model_router
         self._jobs: dict[str, VideoJob] = {}
         self._logger = logging.getLogger(self.__class__.__name__)
 
@@ -112,8 +120,7 @@ class VideoGenerationPipeline:
         """Execute the video generation pipeline for a job.
 
         Args:
-            job_id: The job ID to execute.
-
+            job_id: The job ID to execute.ü
         Returns:
             The completed VideoJob.
 
@@ -137,6 +144,11 @@ class VideoGenerationPipeline:
             # Stage 2: Shot Planning
             await self._stage_shot_planning(job)
 
+
+            #if self._settings.execution_profile == "debug_cpu":
+            job.scenes.scenes = job.scenes.scenes[:1]
+            job.scenes.scenes[0].shots = job.scenes.scenes[0].shots[:2]
+
             # Stage 3: Video Generation
             await self._stage_video_generation(job)
 
@@ -149,6 +161,16 @@ class VideoGenerationPipeline:
             job.status = JobStatus.COMPLETED
             job.progress = "Complete"
             self._logger.info("Pipeline completed successfully for job %s", job_id)
+
+            # Log cost summary if model router is available
+            if self._model_router:
+                cost_summary = self._model_router.get_cost_summary()
+                self._logger.info(
+                    "Cost summary for job %s: Total=$%.4f, By stage: %s",
+                    job_id,
+                    cost_summary["total_cost"],
+                    cost_summary["by_stage"],
+                )
 
         except Exception as e:
             self._logger.exception("Pipeline failed for job %s: %s", job_id, e)
@@ -171,6 +193,7 @@ class VideoGenerationPipeline:
             processed = await self._nlp_processor.preprocess(
                 job.story_input.text,
                 max_tokens=self._settings.llm_max_tokens,
+                skip_summarization_threshold=self._settings.llm_skip_summarization_threshold,
             )
             job.processed_story = processed
             self._logger.info(
@@ -235,7 +258,7 @@ class VideoGenerationPipeline:
         job.current_stage = "shot_planning"
         self._logger.info("Stage: Shot planning")
 
-        if self._settings.llm_parallel:
+        if self._settings.llm_parallel: # AB - Check this block
             # Parallel shot planning for all scenes
             self._logger.info("Running parallel shot planning for %d scenes", len(job.scenes.scenes))
             job.progress = "Planning shots (parallel)..."
@@ -286,6 +309,14 @@ class VideoGenerationPipeline:
                     scene.id,
                     shot.id,
                 )
+
+                # Safety check before generating video # AB - Commented out for now
+                # if self._model_router:
+                #     is_safe = await self._model_router.check_safety(shot.description)
+                #     if not is_safe:
+                #         error_msg = f"Unsafe content detected in shot {shot.id}: {shot.description[:100]}"
+                #         self._logger.error(error_msg)
+                #         raise ValueError(error_msg)
 
                 # Update shot index for style context
                 if hasattr(self._video_agent, "set_current_scene"):

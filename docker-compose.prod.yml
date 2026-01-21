@@ -1,0 +1,103 @@
+# Docker Compose for Production Deployment
+# Usage: docker-compose -f docker-compose.prod.yml up -d
+version: "3.9"
+
+services:
+  shotgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: shotgraph:latest
+    container_name: shotgraph-prod
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - EXECUTION_PROFILE=prod_gpu
+      - GPU_ENABLED=true
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-mistralai/Mistral-7B-Instruct-v0.3}
+      - LLM_PARALLEL=${LLM_PARALLEL:-true}
+      # Per-stage model configuration
+      - LLM_MODEL_STORY_COMPRESS=${LLM_MODEL_STORY_COMPRESS:-google/gemma-3n-E4B-it}
+      - LLM_MODEL_STORY_COMPRESS_FALLBACK=${LLM_MODEL_STORY_COMPRESS_FALLBACK:-meta-llama/Llama-3.2-3B-Instruct-Turbo}
+      - LLM_MODEL_SCENE_DRAFT=${LLM_MODEL_SCENE_DRAFT:-meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo}
+      - LLM_MODEL_SCENE_DRAFT_LARGE=${LLM_MODEL_SCENE_DRAFT_LARGE:-meta-llama/Llama-4-Scout-17B-16E-Instruct}
+      - LLM_MODEL_SHOT_FINAL=${LLM_MODEL_SHOT_FINAL:-meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8}
+      - LLM_MODEL_SHOT_FINAL_FALLBACK=${LLM_MODEL_SHOT_FINAL_FALLBACK:-meta-llama/Llama-3.3-70B-Instruct-Turbo}
+      - LLM_MODEL_JSON_REPAIR=${LLM_MODEL_JSON_REPAIR:-meta-llama/Llama-3.2-3B-Instruct-Turbo}
+      - LLM_SAFETY_MODEL=${LLM_SAFETY_MODEL:-meta-llama/Llama-Guard-4-12B}
+      - LLM_SKIP_SUMMARIZATION_THRESHOLD=${LLM_SKIP_SUMMARIZATION_THRESHOLD:-2000}
+      - LLM_USE_LARGE_CONTEXT_THRESHOLD=${LLM_USE_LARGE_CONTEXT_THRESHOLD:-8000}
+      - USE_TOON_FORMAT=${USE_TOON_FORMAT:-true}
+      - STORAGE_PATH=/app/output
+      - ASSETS_PATH=/app/assets
+      - MAX_RETRIES=${MAX_RETRIES:-2}
+      - WORKERS=${WORKERS:-1}
+      - HOST=0.0.0.0
+      - PORT=8000
+      # Video generation
+      - VIDEO_MODEL=${VIDEO_MODEL:-stable-video-diffusion}
+      - VIDEO_RESOLUTION=${VIDEO_RESOLUTION:-1024x576}
+      - VIDEO_FPS=${VIDEO_FPS:-24}
+      - DEFAULT_SHOT_DURATION=${DEFAULT_SHOT_DURATION:-5.0}
+      # TTS
+      - TTS_VOICE_EN=${TTS_VOICE_EN:-en-US-AriaNeural}
+      - TTS_VOICE_HI=${TTS_VOICE_HI:-hi-IN-SwaraNeural}
+      # Music
+      - MUSIC_MODEL=${MUSIC_MODEL:-musicgen-medium}
+      - MUSIC_MODEL_ORG=${MUSIC_MODEL_ORG:-facebook}
+      - MUSIC_MAX_SEGMENT_DURATION=${MUSIC_MAX_SEGMENT_DURATION:-12.0}
+      - MUSIC_VOLUME=${MUSIC_VOLUME:-0.3}
+      - MUSIC_DUCK_LEVEL=${MUSIC_DUCK_LEVEL:-0.2}
+      - MUSIC_CROSSFADE_DURATION=${MUSIC_CROSSFADE_DURATION:-1.0}
+      # Security
+      - API_KEY_ENABLED=${API_KEY_ENABLED:-true}
+      - API_KEY=${API_KEY}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-10}
+      - MAX_STORY_LENGTH=${MAX_STORY_LENGTH:-100000}
+      - MAX_STORY_SIZE_BYTES=${MAX_STORY_SIZE_BYTES:-500000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-[]}
+    env_file:
+      - .env.prod
+    volumes:
+      - shotgraph_output:/app/output
+      - shotgraph_assets:/app/assets
+      - shotgraph_models:/app/models:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-4.0}'
+          memory: ${MEMORY_LIMIT:-8G}
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - shotgraph_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+
+volumes:
+  shotgraph_output:
+    driver: local
+  shotgraph_assets:
+    driver: local
+  shotgraph_models:
+    driver: local
+
+networks:
+  shotgraph_net:
+    driver: bridge

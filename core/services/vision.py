@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.exceptions import VideoGenerationError
+from core.services.device_utils import cleanup_memory
 
 if TYPE_CHECKING:
     from config.settings import Settings
@@ -90,7 +91,12 @@ class MockVideoGenerator:
             img.save(img_path)
 
             # Convert to video using moviepy
-            from moviepy.editor import ImageClip
+            try:
+                from moviepy import ImageClip  # type: ignore[import-untyped]
+            except ImportError as e:
+                raise VideoGenerationError(
+                    "moviepy not installed. Install with: pip install moviepy"
+                ) from e
 
             video_path = self._output_dir / f"{cache_key}.mp4"
             clip = ImageClip(str(img_path)).set_duration(duration_seconds)
@@ -139,7 +145,7 @@ class DiffuseVideoGenerator:
     """Production video generator using diffusion models.
 
     Uses HuggingFace diffusers library for text-to-video generation.
-    Requires GPU with sufficient VRAM.
+    Supports both GPU (CUDA) and CPU execution. GPU recommended for performance.
     """
 
     def __init__(self, settings: "Settings"):
@@ -156,6 +162,7 @@ class DiffuseVideoGenerator:
         self._fps = settings.video_fps
         self._pipeline = None
         self._image_pipeline = None
+        self._device: str | None = None  # Will be set in _load_pipelines
 
     def _load_pipelines(self) -> None:
         """Lazy load the diffusion pipelines."""
@@ -166,31 +173,85 @@ class DiffuseVideoGenerator:
 
         try:
             import torch
+        except ImportError as e:
+            raise VideoGenerationError(
+                "PyTorch not installed. Install with: pip install torch"
+            ) from e
+
+        try:
+            # import os
+            # os.environ["XFORMERS_MORE_DETAILS"] = "1"
             from diffusers import (
                 StableDiffusionPipeline,
                 StableVideoDiffusionPipeline,
             )
-
-            # Load image pipeline for generating keyframes
-            self._image_pipeline = StableDiffusionPipeline.from_pretrained(
-                "stabilityai/stable-diffusion-2-1",
-                torch_dtype=torch.float16,
-            ).to("cuda")
-
-            # Load video pipeline
-            self._pipeline = StableVideoDiffusionPipeline.from_pretrained(
-                self._model_path,
-                torch_dtype=torch.float16,
-            ).to("cuda")
-
-            logger.info("Diffusion pipelines loaded successfully")
-
         except ImportError as e:
             raise VideoGenerationError(
                 "diffusers library not available. Install with: pip install diffusers"
             ) from e
+        except (RuntimeError, OSError) as e:
+            error_msg = str(e)
+            if "DLL load failed" in error_msg or "_C" in error_msg or "could not be found" in error_msg:
+                raise VideoGenerationError(
+                    "Failed to load diffusers due to missing system dependencies. "
+                    "On Windows, this usually indicates missing Visual C++ Redistributables. "
+                    "Solutions:\n"
+                    "1. Install Visual C++ Redistributables: "
+                    "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+                    "2. Reinstall PyTorch and diffusers: "
+                    "pip uninstall torch diffusers && pip install torch diffusers\n"
+                    "3. Ensure PyTorch and diffusers versions are compatible\n"
+                    f"Original error: {error_msg}"
+                ) from e
+            raise VideoGenerationError(f"Failed to import diffusers: {error_msg}") from e
+
+        try:
+            # Detect device
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info("Using device: %s", self._device)
+
+            # Use appropriate dtype for device
+            torch_dtype = torch.float16 if self._device == "cuda" else torch.float32
+
+            # Load image pipeline for generating keyframes # AB - Model name to config
+            self._image_pipeline = StableDiffusionPipeline.from_pretrained(
+                "sd2-community/stable-diffusion-2-1",
+                torch_dtype=torch_dtype,
+                use_safetensors=True
+            ).to(self._device)
+
+            # Load video pipeline
+            self._pipeline = StableVideoDiffusionPipeline.from_pretrained(
+                self._model_path,
+                torch_dtype=torch_dtype,                
+                use_safetensors=True
+            ).to(self._device)
+
+            logger.info("Diffusion pipelines loaded successfully")
+
         except Exception as e:
             raise VideoGenerationError(f"Failed to load diffusion pipeline: {e}") from e
+
+    def _get_device_params(self) -> dict[str, int]:
+        """Get device-specific generation parameters.
+
+        Returns:
+            Dictionary with num_frames_max, num_inference_steps, decode_chunk_size, image_steps.
+        """
+        if self._device == "cpu":
+            return {
+                "num_frames_max": 14,  # Reduced from 25
+                "num_inference_steps": 20,  # Reduced from 25
+                "decode_chunk_size": 1,  # Reduced from 4
+                "image_steps": 20,  # For image pipeline
+            }
+        else:  # GPU
+            return {
+                "num_frames_max": 25,
+                "num_inference_steps": 25,
+                "decode_chunk_size": 4,
+                "image_steps": 25,
+            }
 
     def generate(
         self,
@@ -216,13 +277,14 @@ class DiffuseVideoGenerator:
         logger.info("Generating video for: %s... (seed=%s)", prompt[:50], seed)
 
         try:
+            import numpy as np
             import torch
             from PIL import Image
 
             # Set up generator with seed for reproducibility
             generator = None
             if seed is not None:
-                generator = torch.Generator(device="cuda").manual_seed(seed)
+                generator = torch.Generator(device=self._device).manual_seed(seed)
 
             # Generate or load initial frame
             if init_image and init_image.exists():
@@ -230,9 +292,10 @@ class DiffuseVideoGenerator:
                 image = image.resize(self._resolution)
             else:
                 # Generate keyframe from prompt
+                params = self._get_device_params()
                 result = self._image_pipeline(
                     prompt,
-                    num_inference_steps=25,
+                    num_inference_steps=params["image_steps"],
                     guidance_scale=7.5,
                     generator=generator,
                 )
@@ -240,16 +303,58 @@ class DiffuseVideoGenerator:
 
             # Generate video from image
             # Note: SVD generates ~25 frames at a time
-            num_frames = min(25, int(duration_seconds * self._fps / 2))
+            params = self._get_device_params()
+            num_frames = min(params["num_frames_max"], int(duration_seconds * self._fps / 2))
 
-            with torch.inference_mode():
-                frames = self._pipeline(
-                    image,
-                    num_frames=num_frames,
-                    num_inference_steps=25,
-                    decode_chunk_size=4,
-                    generator=generator,
-                ).frames[0]
+            if self._device == "cpu":
+                logger.info(
+                    "CPU mode: using %d frames, chunk_size=%d, steps=%d",
+                    num_frames,
+                    params["decode_chunk_size"],
+                    params["num_inference_steps"],
+                )
+
+            # Memory cleanup before generation
+            cleanup_memory(self._device)
+
+            # Generate with retry logic for memory errors
+            try:
+                with torch.inference_mode():
+                    frames = self._pipeline(
+                        image,
+                        num_frames=num_frames,
+                        num_inference_steps=params["num_inference_steps"],
+                        decode_chunk_size=params["decode_chunk_size"],
+                        generator=generator,
+                    ).frames[0]
+            except RuntimeError as e:
+                error_msg = str(e)
+                if "not enough memory" in error_msg.lower() or "alloc" in error_msg.lower():
+                    # Retry with even more conservative settings
+                    logger.warning(
+                        "Memory error during generation, retrying with reduced settings: %s",
+                        error_msg[:100],
+                    )
+
+                    # Further reduce for retry
+                    retry_params = {
+                        "num_frames": min(8, num_frames),
+                        "num_inference_steps": 15,
+                        "decode_chunk_size": 1,
+                    }
+
+                    cleanup_memory(self._device)
+
+                    with torch.inference_mode():
+                        frames = self._pipeline(
+                            image,
+                            num_frames=retry_params["num_frames"],
+                            num_inference_steps=retry_params["num_inference_steps"],
+                            decode_chunk_size=retry_params["decode_chunk_size"],
+                            generator=generator,
+                        ).frames[0]
+                else:
+                    raise
 
             # Save video
             seed_suffix = f"_s{seed}" if seed else ""
@@ -257,9 +362,14 @@ class DiffuseVideoGenerator:
             video_path = self._output_dir / f"video_{video_id}{seed_suffix}.mp4"
 
             # Export frames to video
-            from moviepy.editor import ImageSequenceClip
+            try:
+                from moviepy import ImageSequenceClip  # type: ignore[import-untyped]
+            except ImportError as e:
+                raise VideoGenerationError(
+                    "moviepy not installed. Install with: pip install moviepy"
+                ) from e
 
-            clip = ImageSequenceClip([frame for frame in frames], fps=self._fps)
+            clip = ImageSequenceClip([np.array(frame) for frame in frames], fps=self._fps)
             clip.write_videofile(str(video_path), codec=self._settings.video_codec, logger=None)
             clip.close()
 
@@ -281,7 +391,8 @@ class DiffuseVideoGenerator:
         try:
             import torch
 
-            torch.cuda.empty_cache()
+            if self._device == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
         except Exception:
             pass
 

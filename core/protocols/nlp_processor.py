@@ -14,6 +14,8 @@ class INLPProcessor(Protocol):
         text: str,
         *,
         max_tokens: int = 4096,
+        summarize_if_long: bool = True,
+        skip_summarization_threshold: int = 2000,
     ) -> "ProcessedStory":
         """Preprocess story text for the pipeline.
 
@@ -22,6 +24,8 @@ class INLPProcessor(Protocol):
         Args:
             text: The raw story text.
             max_tokens: Maximum tokens per chunk for LLM context.
+            summarize_if_long: Whether to generate summary for long texts.
+            skip_summarization_threshold: Skip summarization if tokens < threshold.
 
         Returns:
             ProcessedStory with chunks, summary, and entities.

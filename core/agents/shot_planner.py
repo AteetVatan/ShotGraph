@@ -14,6 +14,7 @@ from config.prompt_loader import (
 from core.exceptions import LLMParseError
 from core.models import Scene, Shot, ShotType
 from core.protocols.llm_client import ILLMClient
+from core.services.model_router import ModelRouter
 from core.services.toon import TOONCodec
 
 from .base import BaseAgent
@@ -32,6 +33,7 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
         self,
         *,
         llm_client: ILLMClient,
+        model_router: ModelRouter | None = None,
         max_retries: int = 2,
         system_prompt: str | None = None,
         style_context_manager: "StyleContextManager | None" = None,
@@ -40,7 +42,8 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
         """Initialize the shot planner agent.
 
         Args:
-            llm_client: LLM client for text generation.
+            llm_client: LLM client for text generation (fallback if router not available).
+            model_router: Optional model router for cost-optimized routing (Step C).
             max_retries: Maximum retry attempts.
             system_prompt: Optional custom system prompt.
             style_context_manager: Optional style context for consistency.
@@ -48,6 +51,8 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
         """
         super().__init__(max_retries=max_retries)
         self._llm = llm_client
+        self._router = model_router
+        self._settings = settings
         self._style_ctx = style_context_manager
         self._use_toon = settings.use_toon_format if settings else False
         self._toon_codec = TOONCodec() if self._use_toon else None
@@ -103,11 +108,21 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
         # Build user prompt with style context if available
         user_prompt = self._build_user_prompt(scene)
 
-        response = await self._llm.complete(
-            system_prompt=self._system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.5,  # Slightly higher for creative shot descriptions
-        )
+        # Use ModelRouter if available (Step C), otherwise fallback to direct LLM client
+        # For now, use primary model; fallback can be triggered on validation failure
+        if self._router:
+            response = await self._router.call_stage_c(
+                system_prompt=self._system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.5,  # Slightly higher for creative shot descriptions
+                use_fallback=False,
+            )
+        else:
+            response = await self._llm.complete(
+                system_prompt=self._system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.5,  # Slightly higher for creative shot descriptions
+            )
 
         self.logger.debug("LLM response: %s", response[:200])
 
@@ -115,26 +130,36 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
             # Parse response based on format
             data = self._parse_response(response)
 
+            # Pre-process shot data for validation
+            shots_data = data.get("shots", [])
+            if not shots_data:
+                raise LLMParseError(
+                    f"No shots found for scene {scene.id}",
+                    raw_response=response,
+                )
+
+            # Validate into Pydantic models (never trust raw LLM TOON as source of truth)
             shots = []
-            for idx, shot_data in enumerate(data.get("shots", [])):
-                # Map shot_type string to enum
+            for idx, shot_data in enumerate(shots_data):
+                # Normalize shot_type string to enum before validation
                 shot_type_str = shot_data.get("shot_type")
                 shot_type = self._parse_shot_type(shot_type_str)
+                shot_data["shot_type"] = shot_type  # Pydantic will handle enum conversion
 
                 # Handle null dialogue from TOON format
                 dialogue = shot_data.get("dialogue")
                 if dialogue in ("null", "None", None):
                     dialogue = None
+                    shot_data["dialogue"] = None
+                    shot_data["subtitle_text"] = None
+                else:
+                    shot_data["subtitle_text"] = dialogue
 
-                shot = Shot(
-                    id=shot_data["id"],
-                    scene_id=scene.id,
-                    description=shot_data["description"],
-                    duration_seconds=float(shot_data.get("duration", 5.0)),
-                    shot_type=shot_type,
-                    dialogue=dialogue,
-                    subtitle_text=dialogue,  # Use dialogue as subtitle
-                )
+                # Add scene_id (not in LLM response, comes from context)
+                shot_data["scene_id"] = scene.id
+
+                # Validate into Pydantic model
+                shot = Shot.model_validate(shot_data)
                 shots.append(shot)
 
                 # Record shot in style context for continuity
@@ -146,11 +171,11 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
                         visual_style=shot_data.get("visual_style", ""),
                     )
 
-            if not shots:
-                raise LLMParseError(
-                    f"No shots found for scene {scene.id}",
-                    raw_response=response,
-                )
+            # Emit canonical TOON for debugging (guaranteed valid)
+            if self._use_toon and self._toon_codec:
+                shots_dict = {"shots": [shot.model_dump(mode="json") for shot in shots]}
+                canonical_toon = self._toon_codec.encode(shots_dict)
+                self.logger.debug("Canonical TOON (from validated models):\n%s", canonical_toon[:500])
 
             self.logger.info("Successfully planned %d shots for scene %d", len(shots), scene.id)
             return shots

@@ -142,7 +142,7 @@ class VideoGenerationAgent(BaseAgent[Shot, Path]):
             Path to the extracted frame, or None if extraction fails.
         """
         try:
-            from moviepy.editor import VideoFileClip
+            from moviepy import VideoFileClip
             from PIL import Image
 
             clip = VideoFileClip(str(video_path))

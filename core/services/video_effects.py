@@ -204,7 +204,7 @@ class VideoEffects:
         )
 
         try:
-            from moviepy.editor import VideoClip
+            from moviepy import VideoClip
             from PIL import Image
 
             # Load image
@@ -322,7 +322,7 @@ class VideoEffects:
         logger.info("Creating %s transition (%.2fs)", transition_type, duration)
 
         try:
-            from moviepy.editor import VideoClip
+            from moviepy import VideoClip
 
             frame1 = self._load_frame(clip1_last_frame)
             frame2 = self._load_frame(clip2_first_frame)
@@ -405,7 +405,7 @@ class MockVideoEffects:
         logger.info("Mock Ken Burns: creating static video from image")
 
         try:
-            from moviepy.editor import ImageClip
+            from moviepy import ImageClip
             from PIL import Image
 
             if isinstance(image, (str, Path)):

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.exceptions import MusicGenerationError
+from core.services.device_utils import cleanup_memory
 
 if TYPE_CHECKING:
     from config.settings import Settings
@@ -103,7 +104,7 @@ class MockMusicGenerator:
             duration_seconds: Target duration.
         """
         try:
-            from moviepy.editor import AudioFileClip, concatenate_audioclips
+            from moviepy import AudioFileClip, concatenate_audioclips
 
             audio = AudioFileClip(str(source))
             loops_needed = int(duration_seconds / audio.duration) + 1
@@ -165,15 +166,29 @@ class MusicGenGenerator:
             else:
                 model_name = self._model_name
 
+            # Override model for CPU mode (memory-safe for debugging)
+            # CPU mode uses musicgen-small to avoid memory exhaustion (OS error 1455 on Windows)
+            if self._device == "cpu":
+                original_model = model_name
+                if "musicgen-medium" in model_name or "musicgen-large" in model_name:
+                    model_name = f"{self._model_org}/musicgen-small"
+                    logger.warning(
+                        "CPU mode: downgrading model %s -> %s for memory safety",
+                        original_model,
+                        model_name,
+                    )
+
             # Load model with appropriate dtype for device
             torch_dtype = torch.float16 if self._device == "cuda" else torch.float32
             self._model = MusicgenForConditionalGeneration.from_pretrained(
                 model_name,
                 torch_dtype=torch_dtype,
+                use_safetensors=True,
+                low_cpu_mem_usage=True,  # Load incrementally to reduce peak memory
             ).to(self._device)
 
             # Load processor
-            self._processor = AutoProcessor.from_pretrained(model_name)
+            self._processor = AutoProcessor.from_pretrained(model_name, use_safetensors=True)
 
             logger.info("MusicGen loaded successfully")
 
@@ -183,6 +198,23 @@ class MusicGenGenerator:
             ) from e
         except Exception as e:
             raise MusicGenerationError(f"Failed to load MusicGen: {e}") from e
+
+    def _get_device_params(self) -> dict[str, float]:
+        """Get device-specific generation parameters.
+
+        Returns:
+            Dictionary with max_segment_duration and tokens_per_second.
+        """
+        if self._device == "cpu":
+            return {
+                "max_segment_duration": min(6.0, self._settings.music_max_segment_duration),  # Reduced for CPU
+                "tokens_per_second": 50,  # Keep same
+            }
+        else:  # GPU
+            return {
+                "max_segment_duration": self._settings.music_max_segment_duration,
+                "tokens_per_second": 50,
+            }
 
     def generate(
         self,
@@ -218,12 +250,25 @@ class MusicGenGenerator:
 
             # MusicGen can generate longer sequences, but we use segments for consistency
             # For longer durations, we generate segments and concatenate
+            params = self._get_device_params()
             segments = []
             remaining = duration_seconds
 
-            max_segment = self._settings.music_max_segment_duration
+            max_segment = params["max_segment_duration"]
+            tokens_per_second = params["tokens_per_second"]
+
+            if self._device == "cpu":
+                logger.info(
+                    "CPU mode: using max_segment=%.1fs, tokens_per_second=%d",
+                    max_segment,
+                    tokens_per_second,
+                )
+
             while remaining > 0:
                 segment_duration = min(max_segment, remaining)
+
+                # Memory cleanup before each segment
+                cleanup_memory(self._device)
 
                 # Prepare inputs
                 inputs = self._processor(
@@ -234,13 +279,37 @@ class MusicGenGenerator:
 
                 # Generate audio
                 # max_new_tokens controls duration: ~50 tokens per second
-                max_new_tokens = int(segment_duration * 50)
+                max_new_tokens = int(segment_duration * tokens_per_second)
 
-                with torch.inference_mode():
-                    audio_values = self._model.generate(
-                        **inputs,
-                        max_new_tokens=max_new_tokens,
-                    )
+                # Generate with retry logic for memory errors
+                try:
+                    with torch.inference_mode():
+                        audio_values = self._model.generate(
+                            **inputs,
+                            max_new_tokens=max_new_tokens,
+                        )
+                except RuntimeError as e:
+                    error_msg = str(e)
+                    if "not enough memory" in error_msg.lower() or "alloc" in error_msg.lower():
+                        # Retry with even smaller segment
+                        logger.warning(
+                            "Memory error during segment generation, retrying with reduced segment: %s",
+                            error_msg[:100],
+                        )
+
+                        # Further reduce segment size for retry
+                        retry_segment_duration = min(3.0, segment_duration * 0.5)
+                        retry_max_tokens = int(retry_segment_duration * tokens_per_second)
+
+                        cleanup_memory(self._device)
+
+                        with torch.inference_mode():
+                            audio_values = self._model.generate(
+                                **inputs,
+                                max_new_tokens=retry_max_tokens,
+                            )
+                    else:
+                        raise
 
                 # Convert to numpy array
                 # audio_values shape: [batch_size, num_channels, sequence_length]

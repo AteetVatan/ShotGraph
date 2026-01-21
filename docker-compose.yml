@@ -16,6 +16,9 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-mistralai/Mistral-7B-Instruct-v0.3}
       - LLM_PARALLEL=false
+      # Per-stage model configuration (optional, uses cost-optimized defaults if not set)
+      # See env.example for all available per-stage model settings
+      - USE_TOON_FORMAT=${USE_TOON_FORMAT:-true}
       - STORAGE_PATH=/app/output
       - ASSETS_PATH=/app/assets
       - MAX_RETRIES=2
@@ -24,7 +27,7 @@ services:
       - ./assets:/app/assets
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -44,19 +47,22 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-mistralai/Mistral-7B-Instruct-v0.3}
       - LLM_PARALLEL=true
+      # Per-stage model configuration (optional, uses cost-optimized defaults if not set)
+      # See env.example for all available per-stage model settings
+      - USE_TOON_FORMAT=${USE_TOON_FORMAT:-true}
       - STORAGE_PATH=/app/output
       - ASSETS_PATH=/app/assets
     volumes:
       - ./output:/app/output
       - ./assets:/app/assets
-      - ./models:/app/models:ro  # Mount model weights
+      - ./models:/app/models:ro # Mount model weights
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     profiles:
       - gpu
     restart: unless-stopped

@@ -17,6 +17,7 @@ dependencies = [
     "moviepy>=1.0.3",
     "pillow>=10.2.0",
     "toons>=0.1.0",
+    "together>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,8 @@ gpu = [
     "xformers>=0.0.23",
     "scipy>=1.11.0",
     "edge-tts>=6.1.0",
+    # Note: On Windows, if you encounter "DLL load failed" errors with diffusers,
+    # install Visual C++ Redistributables: https://aka.ms/vs/17/release/vc_redist.x64.exe
 ]
 
 [tool.ruff]

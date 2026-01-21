@@ -2,9 +2,9 @@
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import httpx
+from together import Together
 
 from core.exceptions import ShotGraphError
 
@@ -21,7 +21,7 @@ class LLMClientError(ShotGraphError):
 
 
 class TogetherLLMClient:
-    """LLM client for Together.ai API."""
+    """LLM client for Together.ai API using the Together SDK."""
 
     def __init__(self, settings: "Settings"):
         """Initialize the Together.ai client.
@@ -29,9 +29,11 @@ class TogetherLLMClient:
         Args:
             settings: Application settings with API configuration.
         """
-        self._api_key = settings.llm_api_key
-        self._model = settings.llm_model
-        self._base_url = settings.llm_together_base_url
+        if not settings.llm_api_key:
+            raise LLMClientError("LLM API key not configured")
+
+        self._client = Together(api_key=settings.llm_api_key)
+        self._default_model = settings.llm_model
         self._timeout = settings.llm_together_timeout
         self._max_tokens = settings.llm_max_tokens
 
@@ -41,6 +43,9 @@ class TogetherLLMClient:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
+        model: str | None = None,
+        response_format: dict[str, Any] | None = None,
+        safety_model: str | None = None,
     ) -> str:
         """Send a completion request to Together.ai.
 
@@ -48,6 +53,9 @@ class TogetherLLMClient:
             system_prompt: The system instruction.
             user_prompt: The user message.
             temperature: Sampling temperature.
+            model: Optional model override (uses default if None).
+            response_format: Optional structured output format.
+            safety_model: Optional safety/moderation model.
 
         Returns:
             The LLM response text.
@@ -55,117 +63,67 @@ class TogetherLLMClient:
         Raises:
             LLMClientError: If the API call fails.
         """
-        if not self._api_key:
-            raise LLMClientError("LLM API key not configured")
-
-        logger.debug("Sending request to Together.ai model: %s", self._model)
+        model_name = model or self._default_model
+        logger.debug("Sending request to Together.ai model: %s", model_name)
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    f"{self._base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self._model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": temperature,
-                        "max_tokens": self._max_tokens,
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                logger.debug("Received response (%d chars)", len(content))
-                return content
+            # Build request parameters
+            request_params: dict[str, Any] = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": temperature,
+                "max_tokens": self._max_tokens,
+            }
 
-        except httpx.HTTPStatusError as e:
-            raise LLMClientError(
-                f"Together.ai API error: {e.response.status_code} - {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise LLMClientError(f"Together.ai request failed: {e}") from e
-        except (KeyError, IndexError) as e:
-            raise LLMClientError(f"Unexpected response format: {e}") from e
+            # Add optional parameters if provided
+            if response_format:
+                request_params["response_format"] = response_format
 
+            if safety_model:
+                request_params["safety_model"] = safety_model
 
-class GroqLLMClient:
-    """LLM client for Groq API."""
+            # Use Together SDK
+            response = self._client.chat.completions.create(**request_params)
 
-    def __init__(self, settings: "Settings"):
-        """Initialize the Groq client.
+            content = response.choices[0].message.content
+            logger.debug("Received response (%d chars)", len(content))
+            return content
 
-        Args:
-            settings: Application settings with API configuration.
-        """
-        self._api_key = settings.llm_api_key
-        self._model = settings.llm_model
-        self._base_url = settings.llm_groq_base_url
-        self._timeout = settings.llm_groq_timeout
-        self._max_tokens = settings.llm_max_tokens
-
-    async def complete(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-        temperature: float = 0.7,
-    ) -> str:
-        """Send a completion request to Groq.
-
-        Args:
-            system_prompt: The system instruction.
-            user_prompt: The user message.
-            temperature: Sampling temperature.
-
-        Returns:
-            The LLM response text.
-
-        Raises:
-            LLMClientError: If the API call fails.
-        """
-        if not self._api_key:
-            raise LLMClientError("LLM API key not configured")
-
-        logger.debug("Sending request to Groq model: %s", self._model)
-
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    f"{self._base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self._model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": temperature,
-                        "max_tokens": self._max_tokens,
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                logger.debug("Received response (%d chars)", len(content))
-                return content
-
-        except httpx.HTTPStatusError as e:
-            raise LLMClientError(
-                f"Groq API error: {e.response.status_code} - {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise LLMClientError(f"Groq request failed: {e}") from e
-        except (KeyError, IndexError) as e:
-            raise LLMClientError(f"Unexpected response format: {e}") from e
+        except Exception as e:
+            # Extract more detailed error information from Together SDK error objects
+            error_msg = str(e)
+            
+            # Check for Together SDK error response structure
+            if hasattr(e, "api_response"):
+                try:
+                    api_response = e.api_response
+                    error_type = getattr(api_response, "type_", None) or "unknown_error"
+                    error_message = getattr(api_response, "message", error_msg) or error_msg
+                    error_param = getattr(api_response, "param", None)
+                    error_code = getattr(api_response, "code", None)
+                    
+                    if error_param:
+                        error_msg = f"{error_type}: {error_message} (param: {error_param})"
+                    elif error_code:
+                        error_msg = f"{error_type}: {error_message} (code: {error_code})"
+                    else:
+                        error_msg = f"{error_type}: {error_message}"
+                except AttributeError:
+                    pass
+            
+            # Provide helpful context for common errors
+            if "invalid_request_error" in error_msg.lower() or "validation" in error_msg.lower():
+                model_name = request_params.get("model", "")
+                if "Llama-Guard" in str(model_name):
+                    error_msg = (
+                        f"{error_msg}. Note: Llama-Guard models are not available as "
+                        "chat completion models. Use a regular chat model instead."
+                    )
+            
+            raise LLMClientError(f"Together.ai API error: {error_msg}") from e
 
 
 class MockLLMClient:
@@ -185,6 +143,9 @@ class MockLLMClient:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
+        model: str | None = None,
+        response_format: dict[str, Any] | None = None,
+        safety_model: str | None = None,
     ) -> str:
         """Return a mock response based on the prompt context.
 
@@ -192,6 +153,9 @@ class MockLLMClient:
             system_prompt: The system instruction.
             user_prompt: The user message.
             temperature: Sampling temperature (ignored).
+            model: Optional model override (ignored in mock).
+            response_format: Optional structured output format (ignored in mock).
+            safety_model: Optional safety/moderation model (ignored in mock).
 
         Returns:
             A mock JSON response appropriate for the agent type.

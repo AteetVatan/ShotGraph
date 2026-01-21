@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from config.settings import ExecutionProfile, Settings
 from core.agents.audio_tts import TTSAgent
+from core.agents.json_repair import JSONRepairAgent
 from core.agents.music_generator import MusicAgent
 from core.agents.scene_splitter import SceneSplitterAgent
 from core.agents.shot_planner import ShotPlannerAgent
@@ -13,6 +14,7 @@ from core.agents.video_compositor import VideoCompositorAgent
 from core.agents.video_generator import VideoGenerationAgent
 from core.orchestrator import VideoGenerationPipeline
 from core.services.llm_client import MockLLMClient, TogetherLLMClient
+from core.services.model_router import ModelRouter
 from core.services.music import MockMusicGenerator, MusicGenGenerator
 from core.services.tts import EdgeTTSGenerator, MockTTSGenerator
 from core.services.nlp import MockNLPProcessor, StoryPreprocessor
@@ -81,11 +83,6 @@ def _create_llm_client(settings: Settings) -> "ILLMClient":
     if provider == "together":
         logger.info("Using TogetherLLMClient")
         return TogetherLLMClient(settings)
-    elif provider == "groq":
-        from core.services.llm_client import GroqLLMClient
-
-        logger.info("Using GroqLLMClient")
-        return GroqLLMClient(settings)
     else:
         logger.info("Using MockLLMClient (unknown provider: %s)", provider)
         return MockLLMClient(settings)
@@ -145,17 +142,38 @@ def _create_music_generator(settings: Settings, is_debug: bool) -> "IMusicGenera
         return MusicGenGenerator(settings)
 
 
+def _create_model_router(
+    settings: Settings,
+    llm_client: "ILLMClient",
+) -> ModelRouter | None:
+    """Create the model router for cost-optimized routing.
+
+    Args:
+        settings: Application settings.
+        llm_client: LLM client instance.
+
+    Returns:
+        ModelRouter instance, or None if in debug mode without API key.
+    """
+    if settings.execution_profile == ExecutionProfile.DEBUG_CPU and not settings.llm_api_key:
+        logger.info("Skipping ModelRouter (debug mode, no API key)")
+        return None
+
+    logger.info("Creating ModelRouter for cost-optimized routing")
+    return ModelRouter(settings=settings, llm_client=llm_client)
+
+
 def _create_nlp_processor(
     settings: Settings,
     is_debug: bool,
-    llm_client: "ILLMClient | None" = None,
+    model_router: ModelRouter | None = None,
 ) -> "INLPProcessor":
     """Create the appropriate NLP processor based on profile.
 
     Args:
         settings: Application settings.
         is_debug: Whether running in debug mode.
-        llm_client: Optional LLM client for summarization.
+        model_router: Optional model router for cost-optimized summarization.
 
     Returns:
         Configured NLP processor instance.
@@ -166,7 +184,7 @@ def _create_nlp_processor(
     else:
         logger.info("Using StoryPreprocessor with spaCy")
         return StoryPreprocessor(
-            llm_client=llm_client,
+            model_router=model_router,
             use_spacy=True,
         )
 
@@ -214,20 +232,25 @@ def create_pipeline(settings: Settings | None = None) -> VideoGenerationPipeline
 
     # Create service instances
     llm_client = _create_llm_client(settings)
+    model_router = _create_model_router(settings, llm_client)
     video_gen = _create_video_generator(settings, is_debug)
     tts_gen = _create_tts_generator(settings, is_debug)
     music_gen = _create_music_generator(settings, is_debug)
-    nlp_processor = _create_nlp_processor(settings, is_debug, llm_client)
+    nlp_processor = _create_nlp_processor(settings, is_debug, model_router)
     style_ctx_manager = _create_style_context_manager(is_debug)
 
     # Create agents with injected services
+    # Note: Agents will be updated in Phase 5 to use model_router instead of llm_client
+    # For now, we pass both for backward compatibility during migration
     scene_splitter = SceneSplitterAgent(
         llm_client=llm_client,
+        model_router=model_router,
         max_retries=settings.max_retries,
         settings=settings,
     )
     shot_planner = ShotPlannerAgent(
         llm_client=llm_client,
+        model_router=model_router,
         max_retries=settings.max_retries,
         style_context_manager=style_ctx_manager,
         settings=settings,
@@ -247,6 +270,14 @@ def create_pipeline(settings: Settings | None = None) -> VideoGenerationPipeline
     )
     compositor = VideoCompositorAgent(settings=settings)
 
+    # Create JSON repair agent if model router is available
+    json_repair = None
+    if model_router:
+        json_repair = JSONRepairAgent(
+            model_router=model_router,
+            max_retries=1,
+        )
+
     return VideoGenerationPipeline(
         settings=settings,
         scene_splitter=scene_splitter,
@@ -257,6 +288,8 @@ def create_pipeline(settings: Settings | None = None) -> VideoGenerationPipeline
         compositor=compositor,
         nlp_processor=nlp_processor,
         style_context_manager=style_ctx_manager,
+        json_repair_agent=json_repair,
+        model_router=model_router,
     )
 
 

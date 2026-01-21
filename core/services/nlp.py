@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from core.models import ProcessedStory, StoryEntities
 
 if TYPE_CHECKING:
-    from core.protocols.llm_client import ILLMClient
+    from core.services.model_router import ModelRouter
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +38,16 @@ class StoryPreprocessor:
     def __init__(
         self,
         *,
-        llm_client: "ILLMClient | None" = None,
+        model_router: "ModelRouter | None" = None,
         use_spacy: bool = True,
     ):
         """Initialize the preprocessor.
 
         Args:
-            llm_client: Optional LLM client for summarization.
+            model_router: Optional model router for cost-optimized summarization.
             use_spacy: Whether to use spaCy for NER (fallback to regex if False).
         """
-        self._llm = llm_client
+        self._router = model_router
         self._use_spacy = use_spacy
         self._nlp = None
         self._tokenizer = None
@@ -329,7 +329,7 @@ class StoryPreprocessor:
         Returns:
             Extracted entities.
         """
-        # Process text (limit to first 100k chars for performance)
+        # AB - Make this dynamic and configurableProcess text (limit to first 100k chars for performance)
         doc = self._nlp(text[:100000])
 
         characters = set()
@@ -352,7 +352,7 @@ class StoryPreprocessor:
                 if chunk.root.dep_ in ("nsubj", "dobj", "pobj"):
                     themes.add(chunk.text.lower())
 
-        # Limit themes to most common
+        # AB check - Limit themes to most common
         themes = list(themes)[:10]
 
         logger.info(
@@ -361,7 +361,7 @@ class StoryPreprocessor:
             len(locations),
             len(organizations),
         )
-
+        # AB - Check
         return StoryEntities(
             characters=sorted(characters)[:20],  # Limit to top 20
             locations=sorted(locations)[:15],
@@ -471,6 +471,7 @@ Output ONLY the summary, no additional commentary."""
         *,
         max_tokens: int = 4096,
         summarize_if_long: bool = True,
+        skip_summarization_threshold: int = 2000,
     ) -> ProcessedStory:
         """Preprocess story text for the pipeline.
 
@@ -478,6 +479,7 @@ Output ONLY the summary, no additional commentary."""
             text: The raw story text.
             max_tokens: Maximum tokens per chunk for LLM context.
             summarize_if_long: Whether to generate summary for long texts.
+            skip_summarization_threshold: Skip summarization if tokens < threshold.
 
         Returns:
             ProcessedStory with chunks, summary, and entities.
@@ -495,11 +497,19 @@ Output ONLY the summary, no additional commentary."""
         chunks = self.chunk_text(text, max_tokens=max_tokens)
         was_chunked = len(chunks) > 1
 
-        # Summarize if text is long
+        # Cost optimization: Skip summarization for short stories
         summary = None
         if summarize_if_long and token_count > max_tokens * 2:
-            logger.info("Text is long, generating summary...")
-            summary = await self.summarize(text, max_length=1000)
+            # Check threshold before spending LLM cost
+            if token_count >= skip_summarization_threshold:
+                logger.info("Text is long, generating summary...")
+                summary = await self.summarize(text, max_length=1000)
+            else:
+                logger.info(
+                    "Skipping summarization (tokens=%d < threshold=%d, saves cost)",
+                    token_count,
+                    skip_summarization_threshold,
+                )
 
         processed = ProcessedStory(
             original_text=text,
@@ -528,8 +538,20 @@ class MockNLPProcessor:
         text: str,
         *,
         max_tokens: int = 4096,
+        summarize_if_long: bool = True,
+        skip_summarization_threshold: int = 2000,
     ) -> ProcessedStory:
-        """Return basic processed story without NLP."""
+        """Return basic processed story without NLP.
+        
+        Args:
+            text: The raw story text.
+            max_tokens: Maximum tokens per chunk (ignored in mock).
+            summarize_if_long: Whether to generate summary (ignored in mock).
+            skip_summarization_threshold: Skip summarization threshold (ignored in mock).
+        
+        Returns:
+            ProcessedStory with basic processing.
+        """
         return ProcessedStory(
             original_text=text,
             chunks=[text],

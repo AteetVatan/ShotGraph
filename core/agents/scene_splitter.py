@@ -10,6 +10,7 @@ from config.prompt_loader import PROMPT_SCENE_BREAKDOWN, load_prompt
 from core.exceptions import LLMParseError
 from core.models import ProcessedStory, Scene, SceneList, StoryInput
 from core.protocols.llm_client import ILLMClient
+from core.services.model_router import ModelRouter
 from core.services.toon import TOONCodec
 
 from .base import BaseAgent
@@ -27,6 +28,7 @@ class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
         self,
         *,
         llm_client: ILLMClient,
+        model_router: ModelRouter | None = None,
         max_retries: int = 2,
         system_prompt: str | None = None,
         settings: "Settings | None" = None,
@@ -34,13 +36,16 @@ class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
         """Initialize the scene splitter agent.
 
         Args:
-            llm_client: LLM client for text generation.
+            llm_client: LLM client for text generation (fallback if router not available).
+            model_router: Optional model router for cost-optimized routing (Step B).
             max_retries: Maximum retry attempts.
             system_prompt: Optional custom system prompt.
             settings: Optional settings for TOON format configuration.
         """
         super().__init__(max_retries=max_retries)
         self._llm = llm_client
+        self._router = model_router
+        self._settings = settings
         self._processed_story: ProcessedStory | None = None
         self._use_toon = settings.use_toon_format if settings else False
         self._toon_codec = TOONCodec() if self._use_toon else None
@@ -96,11 +101,31 @@ class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
         # Build user prompt with entity context if available
         user_prompt = self._build_user_prompt(input_data)
 
-        response = await self._llm.complete(
-            system_prompt=self._system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.3,  # Lower temperature for more consistent output
+        # Determine if large context needed
+        token_count = (
+            self._processed_story.token_count
+            if self._processed_story
+            else len(input_data.text.split()) * 2
         )
+        use_large = (
+            self._settings
+            and token_count > self._settings.llm_use_large_context_threshold
+        )
+
+        # Use ModelRouter if available (Step B), otherwise fallback to direct LLM client
+        if self._router:
+            response = await self._router.call_stage_b(
+                system_prompt=self._system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.3,
+                use_large=use_large,
+            )
+        else: # AB - Test this block
+            response = await self._llm.complete(
+                system_prompt=self._system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.3,  # Lower temperature for more consistent output
+            )
 
         self.logger.debug("LLM response: %s", response[:200])
 
@@ -108,24 +133,21 @@ class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
             # Parse response based on format
             data = self._parse_response(response)
 
-            # Validate and create SceneList
-            scenes = []
-            for scene_data in data.get("scenes", []):
-                scene = Scene(
-                    id=scene_data["id"],
-                    summary=scene_data["summary"],
-                    text=scene_data["text"],
-                )
-                scenes.append(scene)
+            # Validate into Pydantic models (never trust raw LLM TOON as source of truth)
+            scene_list = SceneList.model_validate(data)
 
-            if not scenes:
+            if not scene_list.scenes:
                 raise LLMParseError(
                     "No scenes found in LLM response",
                     raw_response=response,
                 )
 
-            scene_list = SceneList(scenes=scenes)
-            self.logger.info("Successfully parsed %d scenes", len(scenes))
+            # Emit canonical TOON for debugging (guaranteed valid)
+            if self._use_toon and self._toon_codec:
+                canonical_toon = self._toon_codec.encode(scene_list)
+                self.logger.debug("Canonical TOON (from validated models):\n%s", canonical_toon[:500])
+
+            self.logger.info("Successfully parsed %d scenes", len(scene_list.scenes))
             return scene_list
 
         except json.JSONDecodeError as e:
