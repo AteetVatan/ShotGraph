@@ -145,6 +145,118 @@ class MusicGenGenerator:
         self._processor = None
         self._device = None
 
+    def _check_local_cache_conflicts(self, model_name: str) -> bool:
+        """Check for incomplete or corrupted local cache.
+
+        Args:
+            model_name: Full model name (e.g., 'facebook/musicgen-medium').
+
+        Returns:
+            True if potential cache conflict detected, False otherwise.
+        """
+        from pathlib import Path
+
+        # Determine cache base directory
+        if self._settings.hf_home:
+            cache_base = Path(self._settings.hf_home) / "hub"
+        else:
+            cache_base = Path.home() / ".cache" / "huggingface" / "hub"
+
+        # HuggingFace cache structure: {cache_base}/models--{org}--{model}
+        cache_name = model_name.replace("/", "--")
+        cache_path = cache_base / f"models--{cache_name}"
+
+        if not cache_path.exists():
+            return False
+
+        # Check if cache directory exists but is incomplete
+        # Look for model index file that indicates complete download
+        index_file = cache_path / "refs" / "main" / "model.safetensors.index.json"
+        if cache_path.exists() and not index_file.exists():
+            # Check if there are any files at all
+            has_files = any(cache_path.rglob("*"))
+            if has_files:
+                logger.warning(
+                    "Potential incomplete cache detected for %s at %s. "
+                    "Consider clearing cache if model loading fails.",
+                    model_name,
+                    cache_path,
+                )
+                return True
+
+        return False
+
+    def _load_model_with_retry(
+        self,
+        *,
+        model_name: str,
+        load_func,
+        cache_dir: str | None = None,
+        token: str | None = None,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+    ):
+        """Load HuggingFace model/processor with retry logic.
+
+        Args:
+            model_name: Full model name.
+            load_func: Function to call for loading (from_pretrained).
+            cache_dir: Optional cache directory path.
+            token: Optional HuggingFace token for authentication.
+            max_retries: Maximum retry attempts.
+            retry_delay: Initial delay between retries (exponential backoff).
+
+        Returns:
+            Loaded model or processor.
+
+        Raises:
+            MusicGenerationError: If all retry attempts fail.
+        """
+        from pathlib import Path
+        import time
+
+        for attempt in range(max_retries):
+            try:
+                logger.debug("Loading %s (attempt %d/%d)", model_name, attempt + 1, max_retries)
+                # Build kwargs for from_pretrained
+                kwargs: dict[str, str | None] = {}
+                if token:
+                    kwargs["token"] = token
+                if cache_dir:
+                    kwargs["cache_dir"] = cache_dir
+                return load_func(model_name, **kwargs)
+            except OSError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "Model load failed (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1,
+                        max_retries,
+                        retry_delay,
+                        str(e)[:200],
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    # Final attempt failed - determine cache path for error message
+                    if cache_dir:
+                        cache_base = Path(cache_dir)
+                    else:
+                        cache_base = Path.home() / ".cache" / "huggingface" / "hub"
+                    cache_path = cache_base / f"models--{model_name.replace('/', '--')}"
+                    raise MusicGenerationError(
+                        f"Failed to load model '{model_name}' after {max_retries} attempts. "
+                        f"Error: {e}\n\n"
+                        f"Troubleshooting:\n"
+                        f"1. Check network connectivity to HuggingFace\n"
+                        f"2. Verify model name is correct: {model_name}\n"
+                        f"3. Check for local directory conflicts: {cache_path}\n"
+                        f"4. If model requires authentication, set HUGGINGFACE_TOKEN in .env\n"
+                        f"5. Try manually downloading: huggingface-cli download {model_name}"
+                    ) from e
+            except Exception as e:
+                # Non-OSError exceptions should not be retried
+                raise MusicGenerationError(f"Failed to load model '{model_name}': {e}") from e
+
     def _load_model(self) -> None:
         """Lazy load the MusicGen model."""
         if self._model is not None:
@@ -155,6 +267,16 @@ class MusicGenGenerator:
         try:
             from transformers import MusicgenForConditionalGeneration, AutoProcessor
             import torch
+
+            # Get settings values
+            # cache_dir should point to the hub directory (where models are stored)
+            if self._settings.hf_home:
+                from pathlib import Path
+
+                cache_dir = str(Path(self._settings.hf_home) / "hub")
+            else:
+                cache_dir = None
+            hf_token = self._settings.huggingface_token if self._settings.huggingface_token else None
 
             # Detect device
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -178,17 +300,39 @@ class MusicGenGenerator:
                         model_name,
                     )
 
+            # Check for cache conflicts
+            self._check_local_cache_conflicts(model_name)
+
             # Load model with appropriate dtype for device
             torch_dtype = torch.float16 if self._device == "cuda" else torch.float32
-            self._model = MusicgenForConditionalGeneration.from_pretrained(
-                model_name,
-                torch_dtype=torch_dtype,
-                use_safetensors=True,
-                low_cpu_mem_usage=True,  # Load incrementally to reduce peak memory
+
+            # Load model with retry logic
+            def load_model_func(name: str, **kwargs):
+                return MusicgenForConditionalGeneration.from_pretrained(
+                    name,
+                    torch_dtype=torch_dtype,
+                    use_safetensors=True,
+                    low_cpu_mem_usage=True,
+                    **kwargs,
+                )
+
+            self._model = self._load_model_with_retry(
+                model_name=model_name,
+                load_func=load_model_func,
+                cache_dir=cache_dir,
+                token=hf_token,
             ).to(self._device)
 
-            # Load processor
-            self._processor = AutoProcessor.from_pretrained(model_name, use_safetensors=True)
+            # Load processor with retry logic
+            def load_processor_func(name: str, **kwargs):
+                return AutoProcessor.from_pretrained(name, use_safetensors=True, **kwargs)
+
+            self._processor = self._load_model_with_retry(
+                model_name=model_name,
+                load_func=load_processor_func,
+                cache_dir=cache_dir,
+                token=hf_token,
+            )
 
             logger.info("MusicGen loaded successfully")
 
@@ -196,6 +340,9 @@ class MusicGenGenerator:
             raise MusicGenerationError(
                 "transformers library not available. Install with: pip install transformers"
             ) from e
+        except MusicGenerationError:
+            # Re-raise our custom errors as-is
+            raise
         except Exception as e:
             raise MusicGenerationError(f"Failed to load MusicGen: {e}") from e
 

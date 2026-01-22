@@ -205,6 +205,16 @@ class Settings(BaseSettings):
         description="Duration of crossfade between scene music tracks in seconds",
     )
 
+    # HuggingFace Configuration
+    huggingface_token: str = Field(
+        default="",
+        description="HuggingFace token for authenticated model access (optional, for gated models)",
+    )
+    hf_home: str = Field(
+        default="",
+        description="HuggingFace cache directory path (optional, uses default ~/.cache/huggingface if empty)",
+    )
+
     # Storage
     storage_path: str = Field(default="./output", description="Output storage path")
     assets_path: str = Field(default="./assets", description="Assets directory path")
