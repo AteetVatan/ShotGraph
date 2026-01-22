@@ -42,12 +42,7 @@ SAMPLE_STORY = (
     "source of this darkness and restore peace to their home."
 )
 
-SAMPLE_STORY = (
-     "Once upon a time in a small village nestled between rolling hills, "
-     "there lived a young hero named Alex. Alex was known throughout the land "
-)
-
-SAMPLE_TITLE = "Tiger"
+SAMPLE_TITLE = "A Heros's story"
 SAMPLE_LANGUAGE = Language.ENGLISH
 
 
