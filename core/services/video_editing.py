@@ -97,7 +97,7 @@ class VideoEditor:
             Path to the composed video file.
         """
         # Use setting if not specified
-        if use_frame_interpolation is None:
+        if use_frame_interpolation is None: # AB -check
             use_frame_interpolation = self._settings.video_use_frame_interpolation
         if not video_clips:
             raise CompositionError("No video clips provided", stage="input")
@@ -109,9 +109,38 @@ class VideoEditor:
                 AudioFileClip,
                 CompositeAudioClip,
                 VideoFileClip,
+                concatenate_audioclips,
                 concatenate_videoclips,
             )
-            from moviepy.video.fx import FadeIn, FadeOut
+            # Import fade effects - handle different MoviePy versions
+            try:
+                # Try MoviePy 2.x style: effects as classes
+                from moviepy.video.fx import FadeIn, FadeOut
+                # Convert classes to functions for compatibility
+                # Note: with_effects() expects a list of effects
+                def fadein(clip, duration):
+                    if hasattr(clip, 'with_effects'):
+                        return clip.with_effects([FadeIn(duration=duration)])
+                    else:
+                        # Fallback: try direct instantiation and application
+                        return FadeIn(duration=duration).apply(clip)
+                def fadeout(clip, duration):
+                    if hasattr(clip, 'with_effects'):
+                        return clip.with_effects([FadeOut(duration=duration)])
+                    else:
+                        # Fallback: try direct instantiation and application
+                        return FadeOut(duration=duration).apply(clip)
+            except (ImportError, AttributeError):
+                # Fallback to MoviePy 1.x style: effects as functions
+                try:
+                    from moviepy.video.fx import fadein, fadeout
+                except ImportError:
+                    # Last resort: access via module attributes
+                    import moviepy.video.fx as vfx_module
+                    fadein = getattr(vfx_module, 'fadein', None)
+                    fadeout = getattr(vfx_module, 'fadeout', None)
+                    if fadein is None or fadeout is None:
+                        raise ImportError("Could not import fadein/fadeout from moviepy.video.fx")
             from moviepy.audio.fx import AudioLoop
 
             clips = []
@@ -144,27 +173,30 @@ class VideoEditor:
                 raise CompositionError("No valid video clips loaded", stage="loading")
 
             # Apply transitions if enabled
-            if transitions and len(clips) > 1:
-                fade_duration = self._settings.video_transition_duration
-                
-                if use_frame_interpolation:
-                    # Use frame interpolation for smoother transitions
-                    clips = self._apply_interpolated_transitions(
-                        clips,
-                        video_clips,
-                        fade_duration,
-                    )
-                else:
-                    # Use standard fade transitions
-                    processed_clips = []
-                    for i, clip in enumerate(clips):
-                        if i > 0:
-                            clip = clip.fx(FadeIn, fade_duration)
-                        if i < len(clips) - 1:
-                            clip = clip.fx(FadeOut, fade_duration)
-                        processed_clips.append(clip)
-                    clips = processed_clips
-
+            if transitions and len(clips) > 1:                
+                try:                
+                    fade_duration = self._settings.video_transition_duration
+                    
+                    if use_frame_interpolation:
+                        # Use frame interpolation for smoother transitions
+                        clips = self._apply_interpolated_transitions(
+                            clips,
+                            video_clips,
+                            fade_duration,
+                        )
+                    else:
+                        # Use standard fade transitions
+                        processed_clips = []
+                        for i, clip in enumerate(clips):
+                            if i > 0:
+                                clip = fadein(clip, fade_duration)
+                            if i < len(clips) - 1:
+                                clip = fadeout(clip, fade_duration)
+                            processed_clips.append(clip)
+                        clips = processed_clips
+                except Exception as e:
+                    logger.warning("Failed to apply transitions: %s", e)
+                    raise CompositionError(f"Transition application failed: {e}", stage="transitions") from e
             # Concatenate all clips
             final_video = concatenate_videoclips(clips, method="compose")
 
@@ -184,7 +216,19 @@ class VideoEditor:
                 music = AudioFileClip(str(music_track))
                 # Loop music if shorter than video
                 if music.duration < final_video.duration:
-                    music = music.fx(AudioLoop, duration=final_video.duration)
+                    # Apply AudioLoop effect - handle different MoviePy versions
+                    try:
+                        # MoviePy v2.x: use with_effects with list
+                        if hasattr(music, 'with_effects'):
+                            music = music.with_effects([AudioLoop(duration=final_video.duration)])
+                        else:
+                            # MoviePy v1.x: use fx method
+                            music = music.fx(AudioLoop, duration=final_video.duration)
+                    except (AttributeError, TypeError):
+                        # Fallback: manually loop by concatenating
+                        from moviepy import concatenate_audioclips
+                        loops_needed = int(final_video.duration / music.duration) + 1
+                        music = concatenate_audioclips([music] * loops_needed).subclip(0, final_video.duration)
                 else:
                     music = music.subclip(0, final_video.duration)
                 music_audio = music
@@ -274,8 +318,18 @@ class VideoEditor:
 
                 # Loop or trim to fit scene duration
                 if audio.duration < scene_duration:
-                    # Loop the music
-                    audio = audio.fx(AudioLoop, duration=scene_duration)
+                    # Loop the music - handle different MoviePy versions
+                    try:
+                        # MoviePy v2.x: use with_effects with list
+                        if hasattr(audio, 'with_effects'):
+                            audio = audio.with_effects([AudioLoop(duration=scene_duration)])
+                        else:
+                            # MoviePy v1.x: use fx method
+                            audio = audio.fx(AudioLoop, duration=scene_duration)
+                    except (AttributeError, TypeError):
+                        # Fallback: manually loop by concatenating
+                        loops_needed = int(scene_duration / audio.duration) + 1
+                        audio = concatenate_audioclips([audio] * loops_needed).subclip(0, scene_duration)
                 else:
                     audio = audio.subclip(0, scene_duration)
 
@@ -398,7 +452,35 @@ class VideoEditor:
             List of clips with interpolated transitions inserted.
         """
         from moviepy import ImageSequenceClip, concatenate_videoclips
-        from moviepy.video.fx import FadeIn, FadeOut
+        # Import fade effects - handle different MoviePy versions
+        try:
+            # Try MoviePy 2.x style: effects as classes
+            from moviepy.video.fx import FadeIn, FadeOut
+            # Convert classes to functions for compatibility
+            # Note: with_effects() expects a list of effects
+            def fadein(clip, duration):
+                if hasattr(clip, 'with_effects'):
+                    return clip.with_effects([FadeIn(duration=duration)])
+                else:
+                    # Fallback: try direct instantiation and application
+                    return FadeIn(duration=duration).apply(clip)
+            def fadeout(clip, duration):
+                if hasattr(clip, 'with_effects'):
+                    return clip.with_effects([FadeOut(duration=duration)])
+                else:
+                    # Fallback: try direct instantiation and application
+                    return FadeOut(duration=duration).apply(clip)
+        except (ImportError, AttributeError):
+            # Fallback to MoviePy 1.x style: effects as functions
+            try:
+                from moviepy.video.fx import fadein, fadeout
+            except ImportError:
+                # Last resort: access via module attributes
+                import moviepy.video.fx as vfx_module
+                fadein = getattr(vfx_module, 'fadein', None)
+                fadeout = getattr(vfx_module, 'fadeout', None)
+                if fadein is None or fadeout is None:
+                    raise ImportError("Could not import fadein/fadeout from moviepy.video.fx")
 
         effects = self._get_video_effects()
         num_interp_frames = self._settings.video_interpolation_frames
@@ -408,9 +490,9 @@ class VideoEditor:
         for i, clip in enumerate(clips):
             # Add fade transitions as well
             if i > 0:
-                clip = clip.fx(FadeIn, transition_duration / 2)
+                clip = fadein(clip, transition_duration / 2)
             if i < len(clips) - 1:
-                clip = clip.fx(FadeOut, transition_duration / 2)
+                clip = fadeout(clip, transition_duration / 2)
             
             result_clips.append(clip)
             

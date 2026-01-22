@@ -104,5 +104,8 @@ temp/
 *.tmp
 *.bak
 
+#HF
+.hf_cache
+
 # Cursor/IDE plans
 .cursor/
