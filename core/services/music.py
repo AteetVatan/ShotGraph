@@ -4,10 +4,14 @@ import hashlib
 import logging
 import wave
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.exceptions import MusicGenerationError
-from core.services.device_utils import cleanup_memory
+from core.services.device_utils import (
+    cleanup_memory,
+    get_hf_cache_dir,
+    load_model_with_cache_check,
+)
 
 if TYPE_CHECKING:
     from config.settings import Settings
@@ -268,14 +272,7 @@ class MusicGenGenerator:
             from transformers import MusicgenForConditionalGeneration, AutoProcessor
             import torch
 
-            # Get settings values
-            # cache_dir should point to the hub directory (where models are stored)
-            if self._settings.hf_home:
-                from pathlib import Path
-
-                cache_dir = str(Path(self._settings.hf_home) / "hub")
-            else:
-                cache_dir = None
+            cache_dir = get_hf_cache_dir(self._settings)
             hf_token = self._settings.huggingface_token if self._settings.huggingface_token else None
 
             # Detect device
@@ -300,38 +297,41 @@ class MusicGenGenerator:
                         model_name,
                     )
 
-            # Check for cache conflicts
-            self._check_local_cache_conflicts(model_name)
-
             # Load model with appropriate dtype for device
             torch_dtype = torch.float16 if self._device == "cuda" else torch.float32
 
-            # Load model with retry logic
-            def load_model_func(name: str, **kwargs):
+            # Load model with cache check
+            def load_model_func(name: str, **kwargs: Any) -> Any:
                 return MusicgenForConditionalGeneration.from_pretrained(
                     name,
                     torch_dtype=torch_dtype,
                     use_safetensors=True,
                     low_cpu_mem_usage=True,
+                    token=hf_token,
                     **kwargs,
                 )
 
-            self._model = self._load_model_with_retry(
+            self._model = load_model_with_cache_check(
                 model_name=model_name,
                 load_func=load_model_func,
                 cache_dir=cache_dir,
-                token=hf_token,
+                settings=self._settings,
             ).to(self._device)
 
-            # Load processor with retry logic
-            def load_processor_func(name: str, **kwargs):
-                return AutoProcessor.from_pretrained(name, use_safetensors=True, **kwargs)
+            # Load processor with cache check
+            def load_processor_func(name: str, **kwargs: Any) -> Any:
+                return AutoProcessor.from_pretrained(
+                    name,
+                    use_safetensors=True,
+                    token=hf_token,
+                    **kwargs,
+                )
 
-            self._processor = self._load_model_with_retry(
+            self._processor = load_model_with_cache_check(
                 model_name=model_name,
                 load_func=load_processor_func,
                 cache_dir=cache_dir,
-                token=hf_token,
+                settings=self._settings,
             )
 
             logger.info("MusicGen loaded successfully")

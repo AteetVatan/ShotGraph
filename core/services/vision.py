@@ -3,10 +3,14 @@
 import hashlib
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.exceptions import VideoGenerationError
-from core.services.device_utils import cleanup_memory
+from core.services.device_utils import (
+    cleanup_memory,
+    get_hf_cache_dir,
+    load_model_with_cache_check,
+)
 
 if TYPE_CHECKING:
     from config.settings import Settings
@@ -213,18 +217,38 @@ class DiffuseVideoGenerator:
             # Use appropriate dtype for device
             torch_dtype = torch.float16 if self._device == "cuda" else torch.float32
 
-            # Load image pipeline for generating keyframes # AB - Model name to config
-            self._image_pipeline = StableDiffusionPipeline.from_pretrained(
+            cache_dir = get_hf_cache_dir(self._settings)
+
+            # Load image pipeline for generating keyframes with cache check
+            def load_image_pipeline(name: str, **kwargs: Any) -> Any:
+                return StableDiffusionPipeline.from_pretrained(
+                    name,
+                    torch_dtype=torch_dtype,
+                    use_safetensors=True,
+                    **kwargs,
+                )
+
+            self._image_pipeline = load_model_with_cache_check(
                 "sd2-community/stable-diffusion-2-1",
-                torch_dtype=torch_dtype,
-                use_safetensors=True
+                load_image_pipeline,
+                cache_dir=cache_dir,
+                settings=self._settings,
             ).to(self._device)
 
-            # Load video pipeline
-            self._pipeline = StableVideoDiffusionPipeline.from_pretrained(
+            # Load video pipeline with cache check
+            def load_video_pipeline(name: str, **kwargs: Any) -> Any:
+                return StableVideoDiffusionPipeline.from_pretrained(
+                    name,
+                    torch_dtype=torch_dtype,
+                    use_safetensors=True,
+                    **kwargs,
+                )
+
+            self._pipeline = load_model_with_cache_check(
                 self._model_path,
-                torch_dtype=torch_dtype,                
-                use_safetensors=True
+                load_video_pipeline,
+                cache_dir=cache_dir,
+                settings=self._settings,
             ).to(self._device)
 
             logger.info("Diffusion pipelines loaded successfully")
