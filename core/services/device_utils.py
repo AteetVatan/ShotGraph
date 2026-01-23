@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 DeviceType = Literal["cpu", "cuda"]
 
+# Model file patterns for cache validation
+MODEL_FILE_EXTENSIONS: frozenset[str] = frozenset({".safetensors", ".bin", ".json"})
+MODEL_FILE_PATTERNS: tuple[str, ...] = ("model", "pytorch_model", "config")
+
 
 def detect_device() -> DeviceType:
     """Detect the available compute device.
@@ -149,6 +153,24 @@ def _validate_single_file_cache(cache_path: Path, model_name: str) -> bool:
     return False
 
 
+def _has_model_files(cache_path: Path) -> bool:
+    """Check if cache directory contains actual model files.
+
+    Args:
+        cache_path: Path to model cache directory.
+
+    Returns:
+        True if any model files exist (excluding .no_exist artifacts), False otherwise.
+    """
+    for item in cache_path.rglob("*"):
+        if ".no_exist" in item.parts or not item.is_file():
+            continue
+        if item.suffix in MODEL_FILE_EXTENSIONS:
+            if any(pattern in item.name.lower() for pattern in MODEL_FILE_PATTERNS):
+                return True
+    return False
+
+
 def is_model_cached(
     model_name: str,
     cache_dir: Path | None = None,
@@ -186,11 +208,19 @@ def is_model_cached(
     if _validate_single_file_cache(cache_path, model_name):
         return True
 
-    logger.warning(
-        "Cache directory exists but incomplete for %s at %s",
-        model_name,
-        cache_path,
-    )
+    # Suppress warning if directory only contains artifacts (no actual model files)
+    if not _has_model_files(cache_path):
+        logger.debug(
+            "Cache directory exists but contains only artifacts (no model files) for %s at %s",
+            model_name,
+            cache_path,
+        )
+    else:
+        logger.warning(
+            "Cache directory exists but incomplete for %s at %s",
+            model_name,
+            cache_path,
+        )
     return False
 
 
@@ -226,6 +256,9 @@ def load_model_with_cache_check(
     """
     if cache_dir is None:
         cache_dir = get_hf_cache_dir(settings)
+
+    # Clean up corrupted cache artifacts before validation
+    cleanup_corrupted_cache(model_name, cache_dir, settings=settings)
 
     is_cached = is_model_cached(model_name, cache_dir, require_complete=True)
 
