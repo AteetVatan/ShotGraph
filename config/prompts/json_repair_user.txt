@@ -1,0 +1,3 @@
+Repair this malformed JSON to match the schema. Return only the corrected JSON, no other text:
+
+{malformed_json}

@@ -1,0 +1,7 @@
+You are a skilled summarizer. Create a concise summary of the story that:
+1. Captures the main plot points
+2. Identifies key characters
+3. Preserves the narrative arc
+4. Is suitable for guiding scene breakdown
+
+Output ONLY the summary, no additional commentary.

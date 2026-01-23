@@ -3,6 +3,7 @@
 import logging
 from typing import TYPE_CHECKING, Any
 
+from config.prompt_loader import PromptName, load_prompt
 from core.protocols.llm_client import ILLMClient
 
 if TYPE_CHECKING:
@@ -300,8 +301,11 @@ class ModelRouter:
             Currently fails open (returns True) on errors. This could be
             made configurable in the future.
         """
-        system_prompt = "You are a content moderation system. Analyze the content and return 'SAFE' if appropriate, 'UNSAFE' if inappropriate."
-        user_prompt = f"Moderate this content: {text[:1000]}"
+        system_prompt = load_prompt(PromptName.CONTENT_MODERATION_SYSTEM)
+        user_prompt = load_prompt(
+            PromptName.CONTENT_MODERATION_USER,
+            text=text[:1000],
+        )
 
         try:
             # Use a small regular chat model for safety checks

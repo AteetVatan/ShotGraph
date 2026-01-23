@@ -4,6 +4,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from config.prompt_loader import PromptName, load_prompt
 from core.models import ProcessedStory, StoryEntities
 
 if TYPE_CHECKING:
@@ -442,17 +443,12 @@ class StoryPreprocessor:
             logger.warning("No LLM client for summarization, using truncation")
             return text[:max_length] + "..." if len(text) > max_length else text
 
-        system_prompt = """You are a skilled summarizer. Create a concise summary of the story that:
-1. Captures the main plot points
-2. Identifies key characters
-3. Preserves the narrative arc
-4. Is suitable for guiding scene breakdown
-
-Output ONLY the summary, no additional commentary."""
-
-        user_prompt = f"""Summarize this story in approximately {max_length} characters:
-
-{text[:20000]}"""  # Limit input size
+        system_prompt = load_prompt(PromptName.STORY_SUMMARIZATION_SYSTEM)
+        user_prompt = load_prompt(
+            PromptName.STORY_SUMMARIZATION_USER,
+            max_length=str(max_length),
+            text=text[:20000],  # Limit input size
+        )
 
         try:
             summary = await self._llm.complete(

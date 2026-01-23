@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
+from config.prompt_loader import PromptName, load_prompt
 from core.exceptions import LLMParseError
 from core.protocols.llm_client import ILLMClient
 from core.schemas.json_schemas import get_scene_list_schema, get_shot_list_schema
@@ -65,11 +66,11 @@ class JSONRepairAgent(BaseAgent[JSONRepairInput, dict[str, Any]]):
 
         malformed_json = input_data.malformed_json
 
-        system_prompt = """You are a JSON repair specialist. Your task is to fix any syntax errors, missing quotes, brackets, or invalid structure in the provided JSON. Return ONLY valid JSON that matches the required schema. Do not add any explanation or commentary."""
-
-        user_prompt = f"""Repair this malformed JSON to match the schema. Return only the corrected JSON, no other text:
-
-{malformed_json[:5000]}"""  # Limit input size
+        system_prompt = load_prompt(PromptName.JSON_REPAIR_SYSTEM)
+        user_prompt = load_prompt(
+            PromptName.JSON_REPAIR_USER,
+            malformed_json=malformed_json[:5000],  # Limit input size
+        )
 
         try:
             response = await self._router.call_stage_d(

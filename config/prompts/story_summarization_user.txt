@@ -1,0 +1,3 @@
+Summarize this story in approximately {max_length} characters:
+
+{text}
