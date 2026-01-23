@@ -2,6 +2,7 @@
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
@@ -114,7 +115,11 @@ def _validate_single_file_cache(cache_path: Path, model_name: str) -> bool:
     Returns:
         True if valid model files exist, False otherwise.
     """
-    safetensors_files = list(cache_path.rglob("*.safetensors"))
+    # Filter out .no_exist directories (HuggingFace cache artifacts from interrupted downloads)
+    safetensors_files = [
+        f for f in cache_path.rglob("*.safetensors")
+        if ".no_exist" not in f.parts
+    ]
     if safetensors_files:
         for sf_file in safetensors_files:
             if sf_file.stat().st_size == 0:
@@ -126,7 +131,10 @@ def _validate_single_file_cache(cache_path: Path, model_name: str) -> bool:
                 return False
         return True
 
-    pytorch_files = list(cache_path.rglob("pytorch_model*.bin"))
+    pytorch_files = [
+        f for f in cache_path.rglob("pytorch_model*.bin")
+        if ".no_exist" not in f.parts
+    ]
     if pytorch_files:
         for pt_file in pytorch_files:
             if pt_file.stat().st_size == 0:
@@ -251,3 +259,59 @@ def load_model_with_cache_check(
         cache_dir=str(cache_dir) if cache_dir else None,
         **load_kwargs,
     )
+
+
+def cleanup_corrupted_cache(
+    model_name: str,
+    cache_dir: Path | None = None,
+    *,
+    settings: "Settings | None" = None,
+) -> bool:
+    """Remove corrupted cache entries for a model.
+
+    This removes .no_exist directories and empty files that can cause
+    validation warnings and download issues.
+
+    Args:
+        model_name: Full model name (e.g., "facebook/musicgen-medium").
+        cache_dir: Optional cache directory (defaults to standard HF cache).
+        settings: Optional settings for HF_HOME.
+
+    Returns:
+        True if cleanup was performed, False if no cleanup needed.
+    """
+    if cache_dir is None:
+        cache_dir = get_hf_cache_dir(settings)
+
+    cache_name = model_name.replace("/", "--")
+    cache_path = cache_dir / f"models--{cache_name}"
+
+    if not cache_path.exists():
+        return False
+
+    cleaned = False
+
+    # Remove .no_exist directories (broken symlinks/references)
+    no_exist_dirs = list(cache_path.rglob(".no_exist"))
+    for no_exist_dir in no_exist_dirs:
+        try:
+            shutil.rmtree(no_exist_dir)
+            logger.info("Removed corrupted .no_exist directory: %s", no_exist_dir)
+            cleaned = True
+        except OSError as e:
+            logger.warning("Failed to remove .no_exist directory %s: %s", no_exist_dir, e)
+
+    # Remove empty safetensors/pytorch files
+    for pattern in ["*.safetensors", "pytorch_model*.bin"]:
+        for file_path in cache_path.rglob(pattern):
+            if ".no_exist" in file_path.parts:
+                continue
+            try:
+                if file_path.stat().st_size == 0:
+                    file_path.unlink()
+                    logger.info("Removed empty cache file: %s", file_path)
+                    cleaned = True
+            except OSError as e:
+                logger.warning("Failed to remove empty file %s: %s", file_path, e)
+
+    return cleaned
