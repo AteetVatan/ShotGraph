@@ -9,7 +9,7 @@ from core.models import Language
 class ITTSGenerator(Protocol):
     """Interface for Text-to-Speech generation services."""
 
-    def generate(
+    async def generate(
         self,
         *,
         text: str,

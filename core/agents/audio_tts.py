@@ -63,7 +63,7 @@ class TTSAgent(BaseAgent[Shot, Path]):
 
         from core.models import Language
 
-        audio_path = self._generator.generate(
+        audio_path = await self._generator.generate(
             text=text,
             language=Language.ENGLISH,  # Default to English
         )

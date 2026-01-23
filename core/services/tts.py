@@ -31,7 +31,7 @@ class MockTTSGenerator:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, Path] = {}
 
-    def generate(
+    async def generate(
         self,
         *,
         text: str,
@@ -117,7 +117,7 @@ class EdgeTTSGenerator:
         self._voice_en = settings.tts_voice_en
         self._voice_hi = settings.tts_voice_hi
 
-    def generate(
+    async def generate(
         self,
         *,
         text: str,
@@ -154,7 +154,7 @@ class EdgeTTSGenerator:
             # Generate audio using edge-tts
             # edge_tts.Communicate creates a generator that yields audio chunks
             communicate = edge_tts.Communicate(text, voice)
-            communicate.save(str(audio_path))
+            await communicate.save(str(audio_path))
 
             logger.info("Generated TTS: %s", audio_path)
             return audio_path
@@ -206,7 +206,7 @@ class AI4BharatTTSGenerator:
         except Exception as e:
             raise TTSGenerationError(f"Failed to load AI4Bharat TTS: {e}") from e
 
-    def generate(
+    async def generate(
         self,
         *,
         text: str,
