@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -19,6 +20,11 @@ if TYPE_CHECKING:
     from config.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+# Validation constants
+MIN_TEXT_COMPLETENESS_RATIO: float = 0.85
+MIN_SENTENCE_COVERAGE_RATIO: float = 0.7
+MIN_WORD_LENGTH_FOR_MATCHING: int = 3
 
 
 class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
@@ -142,6 +148,30 @@ class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
                     raw_response=response,
                 )
 
+            # Validate text completeness
+            is_valid, error_msg = self._validate_text_completeness(
+                scene_list,
+                input_data.text,
+            )
+            if not is_valid:
+                self.logger.warning(
+                    "Text completeness validation failed: %s. Retrying...",
+                    error_msg,
+                )
+                raise LLMParseError(
+                    f"Story text not fully captured: {error_msg}",
+                    raw_response=response,
+                )
+
+            # Filter out any empty scenes that passed validation
+            scene_list = self._filter_empty_scenes(scene_list)
+
+            if not scene_list.scenes:
+                raise LLMParseError(
+                    "No valid scenes found after filtering empty scenes",
+                    raw_response=response,
+                )
+
             # Emit canonical TOON for debugging (guaranteed valid)
             if self._use_toon and self._toon_codec:
                 canonical_toon = self._toon_codec.encode(scene_list)
@@ -223,6 +253,142 @@ class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
         parts.append(input_data.text)
 
         return "\n".join(parts)
+
+    def _filter_empty_scenes(self, scene_list: SceneList) -> SceneList:
+        """Filter out scenes with empty text.
+
+        Args:
+            scene_list: The scene list to filter.
+
+        Returns:
+            New SceneList with empty scenes removed.
+        """
+        non_empty_scenes = [s for s in scene_list.scenes if s.text.strip()]
+        return SceneList(scenes=non_empty_scenes)
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize whitespace for text comparison.
+
+        Args:
+            text: Text to normalize.
+
+        Returns:
+            Normalized text with single spaces.
+        """
+        return " ".join(text.split())
+
+    def _extract_sentences(self, text: str) -> list[str]:
+        """Extract sentences from text using regex.
+
+        Args:
+            text: Text to extract sentences from.
+
+        Returns:
+            List of non-empty sentences.
+        """
+        sentences = [
+            s.strip()
+            for s in re.split(r'[.!?]+', text)
+            if s.strip()
+        ]
+        return sentences
+
+    def _check_sentence_coverage(
+        self,
+        original: str,
+        combined: str,
+    ) -> tuple[bool, str]:
+        """Check if all sentences from original are covered in combined.
+
+        Args:
+            original: Original story text.
+            combined: Combined text from all scenes.
+
+        Returns:
+            Tuple of (is_valid, error_message).
+        """
+        original_normalized = self._normalize_text(original)
+        combined_normalized = self._normalize_text(combined)
+        original_sentences = self._extract_sentences(original)
+
+        for sentence in original_sentences:
+            if sentence not in combined_normalized:
+                key_words = [
+                    w.lower()
+                    for w in sentence.split()
+                    if len(w) > MIN_WORD_LENGTH_FOR_MATCHING
+                ]
+                if key_words:
+                    found_words = sum(
+                        1
+                        for word in key_words
+                        if word in combined_normalized.lower()
+                    )
+                    coverage = found_words / len(key_words)
+                    if coverage < MIN_SENTENCE_COVERAGE_RATIO:
+                        return False, f"Missing text: {sentence[:50]}..."
+
+        return True, ""
+
+    def _check_length_ratio(
+        self,
+        original: str,
+        combined: str,
+    ) -> tuple[bool, str]:
+        """Check if combined text length meets minimum ratio.
+
+        Args:
+            original: Original story text.
+            combined: Combined text from all scenes.
+
+        Returns:
+            Tuple of (is_valid, error_message).
+        """
+        original_normalized = self._normalize_text(original)
+        combined_normalized = self._normalize_text(combined)
+
+        if not original_normalized:
+            return False, "Original text is empty"
+
+        length_ratio = len(combined_normalized) / len(original_normalized)
+        if length_ratio < MIN_TEXT_COMPLETENESS_RATIO:
+            return False, (
+                f"Text completeness too low: {length_ratio:.1%} "
+                f"(expected >{MIN_TEXT_COMPLETENESS_RATIO:.0%})"
+            )
+
+        return True, ""
+
+    def _validate_text_completeness(
+        self,
+        scene_list: SceneList,
+        original_text: str,
+    ) -> tuple[bool, str]:
+        """Validate that all original story text is captured in scenes.
+
+        Args:
+            scene_list: The parsed scene list to validate.
+            original_text: The original story text.
+
+        Returns:
+            Tuple of (is_valid, error_message).
+        """
+        filtered = self._filter_empty_scenes(scene_list)
+        if len(filtered.scenes) < len(scene_list.scenes):
+            empty_count = len(scene_list.scenes) - len(filtered.scenes)
+            return False, f"Found {empty_count} scene(s) with empty text"
+
+        combined_text = " ".join(s.text.strip() for s in filtered.scenes)
+
+        is_valid, error_msg = self._check_length_ratio(original_text, combined_text)
+        if not is_valid:
+            return False, error_msg
+
+        is_valid, error_msg = self._check_sentence_coverage(original_text, combined_text)
+        if not is_valid:
+            return False, error_msg
+
+        return True, ""
 
     def _extract_json(self, response: str) -> str:
         """Extract JSON from LLM response, handling markdown code blocks.

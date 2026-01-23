@@ -44,6 +44,11 @@ IMPORTANT:
 - Each scene is numbered (1:, 2:, etc.)
 - Indent nested properties with 2 spaces
 - Use quotes for text values containing special characters
-- Ensure all story text is captured in the scenes
+- CRITICAL COMPLETENESS REQUIREMENTS:
+  * Every sentence from the original story MUST appear in exactly one scene's text field
+  * No scene should have empty text - if a scene has no text, do not create it
+  * After creating scenes, verify that combining all scene text fields reconstructs the entire original story
+  * If you cannot logically group all text into scenes, create additional scenes rather than omitting any text
+  * The combined length of all scene text fields should be approximately equal to the original story length
 - Keep summaries concise but informative
 - Maintain the chronological order of the story
