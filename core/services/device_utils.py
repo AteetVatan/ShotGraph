@@ -60,10 +60,11 @@ def get_hf_cache_dir(settings: "Settings | None" = None) -> Path:
         settings: Optional settings object (for custom HF_HOME).
 
     Returns:
-        Path to HuggingFace hub cache directory.
+        Path to HuggingFace hub cache directory (always absolute).
     """
-    if settings and settings.hf_home:
-        return Path(settings.hf_home) / "hub"
+    if settings and settings.hf_home and settings.hf_home.strip():
+        # Resolve to absolute path to avoid path resolution issues in transformers
+        return Path(settings.hf_home).resolve() / "hub"
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
@@ -257,6 +258,16 @@ def load_model_with_cache_check(
     if cache_dir is None:
         cache_dir = get_hf_cache_dir(settings)
 
+    # Ensure cache_dir is a valid Path (fallback to default if somehow None)
+    if cache_dir is None:
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+
+    # Convert to string and validate it's not empty
+    # Only include cache_dir in kwargs if it's a valid non-empty string
+    cache_dir_str = str(cache_dir).strip() if cache_dir else None
+    if cache_dir_str == "":
+        cache_dir_str = None
+
     # Clean up corrupted cache artifacts before validation
     cleanup_corrupted_cache(model_name, cache_dir, settings=settings)
 
@@ -268,16 +279,22 @@ def load_model_with_cache_check(
             model_name,
         )
         try:
+            # Only include cache_dir if it's valid
+            load_kwargs_with_cache = {**load_kwargs}
+            if cache_dir_str:
+                load_kwargs_with_cache["cache_dir"] = cache_dir_str
             return load_func(
                 model_name,
                 local_files_only=True,
-                cache_dir=str(cache_dir) if cache_dir else None,
-                **load_kwargs,
+                **load_kwargs_with_cache,
             )
-        except OSError as e:
+        except (OSError, AttributeError, ValueError) as e:
+            # OSError: File not found / network issues
+            # AttributeError: Cache incomplete (e.g., processor files missing)
+            # ValueError: Invalid cache state or configuration
             logger.error(
                 "Cache validation passed but model load failed for %s: %s. "
-                "Cache may be corrupted. Attempting download...",
+                "Cache may be corrupted or incomplete. Attempting download...",
                 model_name,
                 e,
             )
@@ -286,12 +303,21 @@ def load_model_with_cache_check(
         "Model %s not in cache or incomplete, downloading...",
         model_name,
     )
-    return load_func(
-        model_name,
-        local_files_only=False,
-        cache_dir=str(cache_dir) if cache_dir else None,
-        **load_kwargs,
-    )
+    # Only include cache_dir if it's valid
+    load_kwargs_with_cache = {**load_kwargs}
+    if cache_dir_str:
+        load_kwargs_with_cache["cache_dir"] = cache_dir_str
+    try:
+        return load_func(
+            model_name,
+            local_files_only=False,
+            **load_kwargs_with_cache,
+        )
+    except (OSError, AttributeError, ValueError, TypeError) as e:
+        raise RuntimeError(
+            f"Failed to load {model_name} from both cache and download. "
+            f"Error: {e}. Try clearing cache at {cache_dir} or check network connection."
+        ) from e
 
 
 def cleanup_corrupted_cache(

@@ -263,7 +263,7 @@ class MusicGenGenerator:
 
     def _load_model(self) -> None:
         """Lazy load the MusicGen model."""
-        if self._model is not None:
+        if self._model is not None and self._processor is not None:
             return
 
         logger.info("Loading MusicGen model: %s", self._model_name)
@@ -302,13 +302,18 @@ class MusicGenGenerator:
 
             # Load model with cache check
             def load_model_func(name: str, **kwargs: Any) -> Any:
+                # Only pass token if it has a value (avoid passing None)
+                model_kwargs = {
+                    "torch_dtype": torch_dtype,
+                    "use_safetensors": True,
+                    "low_cpu_mem_usage": True,
+                    **kwargs,
+                }
+                if hf_token:
+                    model_kwargs["token"] = hf_token
                 return MusicgenForConditionalGeneration.from_pretrained(
                     name,
-                    torch_dtype=torch_dtype,
-                    use_safetensors=True,
-                    low_cpu_mem_usage=True,
-                    token=hf_token,
-                    **kwargs,
+                    **model_kwargs,
                 )
 
             self._model = load_model_with_cache_check(
@@ -320,30 +325,73 @@ class MusicGenGenerator:
 
             # Load processor with cache check
             def load_processor_func(name: str, **kwargs: Any) -> Any:
+                # Only pass token if it has a value (avoid passing None)
+                processor_kwargs = {**kwargs}
+                if hf_token:
+                    processor_kwargs["token"] = hf_token
                 return AutoProcessor.from_pretrained(
                     name,
-                    use_safetensors=True,
-                    token=hf_token,
-                    **kwargs,
+                    **processor_kwargs,
                 )
 
-            self._processor = load_model_with_cache_check(
-                model_name=model_name,
-                load_func=load_processor_func,
-                cache_dir=cache_dir,
-                settings=self._settings,
-            )
+            # DEBUG: Wrap processor loading with full traceback capture
+            import traceback
+            try:
+                self._processor = load_model_with_cache_check(
+                    model_name=model_name,
+                    load_func=load_processor_func,
+                    cache_dir=cache_dir,
+                    settings=self._settings,
+                )
+            except Exception as processor_error:
+                print("=" * 70)
+                print("FULL TRACEBACK FOR PROCESSOR LOADING ERROR:")
+                print("=" * 70)
+                traceback.print_exc()
+                print("=" * 70)
+                print(f"Error type: {type(processor_error).__name__}")
+                print(f"Error message: {processor_error}")
+                print("=" * 70)
+                raise
+
+            # Validate that both model and processor loaded successfully
+            if self._processor is None:
+                raise MusicGenerationError("Failed to load processor: returned None")
+            if self._model is None:
+                raise MusicGenerationError("Failed to load model: returned None")
 
             logger.info("MusicGen loaded successfully")
 
         except ImportError as e:
-            raise MusicGenerationError(
-                "transformers library not available. Install with: pip install transformers"
-            ) from e
+            error_msg = str(e)
+            # Check for specific missing dependencies
+            if "protobuf" in error_msg.lower():
+                raise MusicGenerationError(
+                    "protobuf library is required but not installed. "
+                    "Install with: pip install protobuf>=4.25.0\n"
+                    f"Original error: {error_msg}"
+                ) from e
+            elif "transformers" in error_msg.lower():
+                raise MusicGenerationError(
+                    "transformers library not available. Install with: pip install transformers"
+                ) from e
+            else:
+                raise MusicGenerationError(
+                    f"Missing required dependency. {error_msg}\n"
+                    "Please install missing dependencies from requirements.txt"
+                ) from e
         except MusicGenerationError:
             # Re-raise our custom errors as-is
+            # Reset state on partial failure to force full reload on retry
+            if self._model is not None and self._processor is None:
+                logger.warning("Resetting model state due to partial loading failure")
+                self._model = None
             raise
         except Exception as e:
+            # Reset state on partial failure to force full reload on retry
+            if self._model is not None and self._processor is None:
+                logger.warning("Resetting model state due to partial loading failure")
+                self._model = None
             raise MusicGenerationError(f"Failed to load MusicGen: {e}") from e
 
     def _get_device_params(self) -> dict[str, float]:
@@ -381,6 +429,12 @@ class MusicGenGenerator:
             Path to the generated audio file.
         """
         self._load_model()
+
+        # Safety check: ensure processor is loaded
+        if self._processor is None:
+            raise MusicGenerationError(
+                "Processor not loaded. Model loading may have failed partially."
+            )
 
         logger.info("Generating music (%.1fs): %s...", duration_seconds, prompt[:30])
 

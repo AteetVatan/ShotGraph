@@ -65,6 +65,49 @@ class VideoEditor:
             self._video_effects = VideoEffects(self._settings)
         return self._video_effects
 
+    def _apply_volume(self, audio_clip: Any, volume: float) -> Any:
+        """Apply volume adjustment to audio clip.
+
+        Supports both MoviePy v1.x (volumex) and v2.x (MultiplyVolume effect).
+
+        Args:
+            audio_clip: Audio clip to adjust volume.
+            volume: Volume multiplier (0.0 to 1.0+).
+
+        Returns:
+            Audio clip with volume applied.
+        """
+        try:
+            # MoviePy v2.x: use with_effects with MultiplyVolume
+            from moviepy.audio.fx import MultiplyVolume
+            if hasattr(audio_clip, 'with_effects'):
+                return audio_clip.with_effects([MultiplyVolume(volume)])
+            return MultiplyVolume(volume).apply(audio_clip)
+        except (ImportError, AttributeError):
+            # MoviePy v1.x: use volumex method
+            if hasattr(audio_clip, 'volumex'):
+                return audio_clip.volumex(volume)
+            # Last resort fallback
+            logger.warning("Could not apply volume adjustment, returning original clip")
+            return audio_clip
+
+    def _set_audio(self, video_clip: Any, audio_clip: Any) -> Any:
+        """Set audio on a video clip.
+
+        Supports both MoviePy v1.x (set_audio) and v2.x (with_audio).
+
+        Args:
+            video_clip: Video clip to set audio on.
+            audio_clip: Audio clip to attach.
+
+        Returns:
+            Video clip with audio attached.
+        """
+        # MoviePy v2.x uses with_audio, v1.x uses set_audio
+        if hasattr(video_clip, 'with_audio'):
+            return video_clip.with_audio(audio_clip)
+        return video_clip.set_audio(audio_clip)
+
     def _audio_fadein(self, audio_clip: Any, duration: float) -> Any:
         """Apply fade-in effect to audio clip.
 
@@ -222,7 +265,7 @@ class VideoEditor:
                         # Trim audio to video duration
                         if audio.duration > video.duration:
                             audio = audio.subclip(0, video.duration)
-                        video = video.set_audio(audio)
+                        video = self._set_audio(video, audio)
 
                 clips.append(video)
                 total_duration += video.duration
@@ -302,14 +345,14 @@ class VideoEditor:
 
             # Apply base music volume
             if music_audio:
-                music_audio = music_audio.volumex(self._settings.music_volume)
+                music_audio = self._apply_volume(music_audio, self._settings.music_volume)
 
                 # Mix with existing audio
                 if final_video.audio:
                     mixed_audio = CompositeAudioClip([final_video.audio, music_audio])
-                    final_video = final_video.set_audio(mixed_audio)
+                    final_video = self._set_audio(final_video, mixed_audio)
                 else:
-                    final_video = final_video.set_audio(music_audio)
+                    final_video = self._set_audio(final_video, music_audio)
 
             # Add subtitles if provided
             if subtitles:
@@ -427,13 +470,21 @@ class VideoEditor:
             if audio is None:
                 continue
 
-            fade_in = i > 0
-            fade_out = i < len(scene_tracks) - 1
-            audio = self._apply_audio_crossfades(
-                audio, fade_in, fade_out, crossfade_duration
-            )
-            audio = audio.set_start(track.start_time)
-            audio_clips.append(audio)
+            try:
+                fade_in = i > 0
+                fade_out = i < len(scene_tracks) - 1
+                audio = self._apply_audio_crossfades(
+                    audio, fade_in, fade_out, crossfade_duration
+                )
+                # MoviePy 2.x uses with_start(), 1.x uses set_start()
+                if hasattr(audio, 'with_start'):
+                    audio = audio.with_start(track.start_time)
+                else:
+                    audio = audio.set_start(track.start_time)
+                audio_clips.append(audio)
+            except Exception as e:
+                logger.warning("Failed to apply audio crossfades: %s", e)
+                continue
 
         if not audio_clips:
             return None
@@ -629,20 +680,24 @@ class VideoEditor:
 
         for start_time, end_time, text in subtitles:
             try:
-                txt_clip = (
-                    TextClip(
-                        text,
-                        fontsize=self._settings.video_subtitle_fontsize,
-                        color="white",
-                        stroke_color="black",
-                        stroke_width=2,
-                        method="caption",
-                        size=(video.w - 100, None),
-                    )
-                    .set_position(("center", "bottom"))
-                    .set_start(start_time)
-                    .set_duration(end_time - start_time)
+                txt_clip = TextClip(
+                    text,
+                    fontsize=self._settings.video_subtitle_fontsize,
+                    color="white",
+                    stroke_color="black",
+                    stroke_width=2,
+                    method="caption",
+                    size=(video.w - 100, None),
                 )
+                # MoviePy 2.x uses with_* methods, 1.x uses set_* methods
+                if hasattr(txt_clip, 'with_position'):
+                    txt_clip = txt_clip.with_position(("center", "bottom"))
+                    txt_clip = txt_clip.with_start(start_time)
+                    txt_clip = txt_clip.with_duration(end_time - start_time)
+                else:
+                    txt_clip = txt_clip.set_position(("center", "bottom"))
+                    txt_clip = txt_clip.set_start(start_time)
+                    txt_clip = txt_clip.set_duration(end_time - start_time)
                 subtitle_clips.append(txt_clip)
             except Exception as e:
                 logger.warning("Failed to create subtitle: %s", e)
