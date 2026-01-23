@@ -69,8 +69,8 @@ class GenerateRequest(BaseModel):
         stripped = v.strip()
         if not stripped:
             raise ValueError("Story cannot be empty or contain only whitespace")
-        if len(stripped.split()) < 10:
-            raise ValueError("Story must contain at least 10 words")
+        if len(stripped.split()) < 5:
+            raise ValueError("Story must contain at least 5 words")
         return v
 
 
