@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from together import Together
 
+from core.constants import FieldNames
 from core.exceptions import ShotGraphError
 
 if TYPE_CHECKING:
@@ -174,21 +175,21 @@ class MockLLMClient:
     def _mock_scene_response(self) -> str:
         """Generate mock scene breakdown response."""
         return json.dumps({
-            "scenes": [
+            FieldNames.SCENES: [
                 {
-                    "id": 1,
-                    "summary": "Introduction - Hero in the village",
-                    "text": "Once upon a time in a small village...",
+                    FieldNames.ID: 1,
+                    FieldNames.SUMMARY: "Introduction - Hero in the village",
+                    FieldNames.TEXT: "Once upon a time in a small village...",
                 },
                 {
-                    "id": 2,
-                    "summary": "The Call to Adventure - Meeting the wizard",
-                    "text": "One morning, the hero met an old wizard...",
+                    FieldNames.ID: 2,
+                    FieldNames.SUMMARY: "The Call to Adventure - Meeting the wizard",
+                    FieldNames.TEXT: "One morning, the hero met an old wizard...",
                 },
                 {
-                    "id": 3,
-                    "summary": "The Journey Begins - Setting off",
-                    "text": "The hero decided to embark on the quest...",
+                    FieldNames.ID: 3,
+                    FieldNames.SUMMARY: "The Journey Begins - Setting off",
+                    FieldNames.TEXT: "The hero decided to embark on the quest...",
                 },
             ]
         })
@@ -196,29 +197,29 @@ class MockLLMClient:
     def _mock_shot_response(self) -> str:
         """Generate mock shot planning response."""
         return json.dumps({
-            "shots": [
+            FieldNames.SHOTS: [
                 {
-                    "id": 1,
-                    "description": "Wide establishing shot of a medieval village at dawn, "
+                    FieldNames.ID: 1,
+                    FieldNames.DESCRIPTION: "Wide establishing shot of a medieval village at dawn, "
                     "golden sunlight streaming through thatched roofs",
-                    "duration": 5,
-                    "shot_type": "establishing",
-                    "dialogue": None,
+                    FieldNames.DURATION: 5,
+                    FieldNames.SHOT_TYPE: "establishing",
+                    FieldNames.DIALOGUE: None,
                 },
                 {
-                    "id": 2,
-                    "description": "Medium shot of the main character walking through the village, "
+                    FieldNames.ID: 2,
+                    FieldNames.DESCRIPTION: "Medium shot of the main character walking through the village, "
                     "greeting villagers",
-                    "duration": 6,
-                    "shot_type": "medium",
-                    "dialogue": None,
+                    FieldNames.DURATION: 6,
+                    FieldNames.SHOT_TYPE: "medium",
+                    FieldNames.DIALOGUE: None,
                 },
                 {
-                    "id": 3,
-                    "description": "Close-up of a mysterious figure in robes approaching",
-                    "duration": 4,
-                    "shot_type": "close_up",
-                    "dialogue": "Greetings, young traveler.",
+                    FieldNames.ID: 3,
+                    FieldNames.DESCRIPTION: "Close-up of a mysterious figure in robes approaching",
+                    FieldNames.DURATION: 4,
+                    FieldNames.SHOT_TYPE: "close_up",
+                    FieldNames.DIALOGUE: "Greetings, young traveler.",
                 },
             ]
         })

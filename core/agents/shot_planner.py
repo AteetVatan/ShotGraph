@@ -11,6 +11,7 @@ from config.prompt_loader import (
     PROMPT_STYLE_GUIDE,
     load_prompt,
 )
+from core.constants import FieldNames, NullValues, SHOT_TYPE_MAPPING
 from core.exceptions import LLMParseError
 from core.models import Scene, Shot, ShotType
 from core.protocols.llm_client import ILLMClient
@@ -131,7 +132,7 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
             data = self._parse_response(response)
 
             # Pre-process shot data for validation
-            shots_data = data.get("shots", [])
+            shots_data = data.get(FieldNames.SHOTS, [])
             if not shots_data:
                 raise LLMParseError(
                     f"No shots found for scene {scene.id}",
@@ -142,21 +143,21 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
             shots = []
             for idx, shot_data in enumerate(shots_data):
                 # Normalize shot_type string to enum before validation
-                shot_type_str = shot_data.get("shot_type")
+                shot_type_str = shot_data.get(FieldNames.SHOT_TYPE)
                 shot_type = self._parse_shot_type(shot_type_str)
-                shot_data["shot_type"] = shot_type  # Pydantic will handle enum conversion
+                shot_data[FieldNames.SHOT_TYPE] = shot_type  # Pydantic will handle enum conversion
 
                 # Handle null dialogue from TOON format
-                dialogue = shot_data.get("dialogue")
-                if dialogue in ("null", "None", None):
+                dialogue = shot_data.get(FieldNames.DIALOGUE)
+                if dialogue in (NullValues.NULL, NullValues.NONE, None):
                     dialogue = None
-                    shot_data["dialogue"] = None
-                    shot_data["subtitle_text"] = None
+                    shot_data[FieldNames.DIALOGUE] = None
+                    shot_data[FieldNames.SUBTITLE_TEXT] = None
                 else:
-                    shot_data["subtitle_text"] = dialogue
+                    shot_data[FieldNames.SUBTITLE_TEXT] = dialogue
 
                 # Add scene_id (not in LLM response, comes from context)
-                shot_data["scene_id"] = scene.id
+                shot_data[FieldNames.SCENE_ID] = scene.id
 
                 # Validate into Pydantic model
                 shot = Shot.model_validate(shot_data)
@@ -167,13 +168,13 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
                     self._style_ctx.record_shot(
                         scene_id=scene.id,
                         shot_index=idx,
-                        summary=shot_data["description"][:100],
-                        visual_style=shot_data.get("visual_style", ""),
+                        summary=shot_data[FieldNames.DESCRIPTION][:100],
+                        visual_style=shot_data.get(FieldNames.VISUAL_STYLE, ""),
                     )
 
             # Emit canonical TOON for debugging (guaranteed valid)
             if self._use_toon and self._toon_codec:
-                shots_dict = {"shots": [shot.model_dump(mode="json") for shot in shots]}
+                shots_dict = {FieldNames.SHOTS: [shot.model_dump(mode="json") for shot in shots]}
                 canonical_toon = self._toon_codec.encode(shots_dict)
                 self.logger.debug("Canonical TOON (from validated models):\n%s", canonical_toon[:500])
 
@@ -262,16 +263,7 @@ class ShotPlannerAgent(BaseAgent[Scene, list[Shot]]):
         if not shot_type_str:
             return None
 
-        mapping = {
-            "wide": ShotType.WIDE,
-            "medium": ShotType.MEDIUM,
-            "close_up": ShotType.CLOSE_UP,
-            "close-up": ShotType.CLOSE_UP,
-            "closeup": ShotType.CLOSE_UP,
-            "establishing": ShotType.ESTABLISHING,
-        }
-
-        return mapping.get(shot_type_str.lower())
+        return SHOT_TYPE_MAPPING.get(shot_type_str.lower())
 
     def _extract_json(self, response: str) -> str:
         """Extract JSON from LLM response.

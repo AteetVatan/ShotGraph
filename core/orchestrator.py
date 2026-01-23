@@ -146,8 +146,8 @@ class VideoGenerationPipeline:
 
 
             #if self._settings.execution_profile == "debug_cpu":
-            job.scenes.scenes = job.scenes.scenes[:1]
-            job.scenes.scenes[0].shots = job.scenes.scenes[0].shots[:2]
+            #job.scenes.scenes = job.scenes.scenes[:1]
+            #job.scenes.scenes[0].shots = job.scenes.scenes[0].shots[:2]
 
             # Stage 3: Video Generation
             await self._stage_video_generation(job)

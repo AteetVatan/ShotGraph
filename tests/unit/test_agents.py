@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 from core.agents.base import BaseAgent
 from core.agents.scene_splitter import SceneSplitterAgent
 from core.agents.shot_planner import ShotPlannerAgent
+from core.constants import FieldNames
 from core.exceptions import LLMParseError, RetryExhaustedError
 from core.models import Scene, SceneList, Shot, StoryInput
 
@@ -67,12 +68,12 @@ class TestSceneSplitterAgent:
         self, mock_llm: AsyncMock, sample_story_input: StoryInput
     ) -> None:
         """Test successful scene splitting."""
-        mock_llm.complete.return_value = """{
-            "scenes": [
-                {"id": 1, "summary": "Hero in village", "text": "Once upon a time..."},
-                {"id": 2, "summary": "Meeting wizard", "text": "One morning..."}
+        mock_llm.complete.return_value = f"""{{
+            "{FieldNames.SCENES}": [
+                {{"{FieldNames.ID}": 1, "{FieldNames.SUMMARY}": "Hero in village", "{FieldNames.TEXT}": "Once upon a time..."}},
+                {{"{FieldNames.ID}": 2, "{FieldNames.SUMMARY}": "Meeting wizard", "{FieldNames.TEXT}": "One morning..."}}
             ]
-        }"""
+        }}"""
 
         agent = SceneSplitterAgent(llm_client=mock_llm, max_retries=1)
         result = await agent.run(sample_story_input)
@@ -87,14 +88,14 @@ class TestSceneSplitterAgent:
         self, mock_llm: AsyncMock, sample_story_input: StoryInput
     ) -> None:
         """Test handling of markdown code blocks in response."""
-        mock_llm.complete.return_value = """Here is the breakdown:
+        mock_llm.complete.return_value = f"""Here is the breakdown:
 
 ```json
-{
-    "scenes": [
-        {"id": 1, "summary": "Scene one", "text": "Text..."}
+{{
+    "{FieldNames.SCENES}": [
+        {{{FieldNames.ID}: 1, "{FieldNames.SUMMARY}": "Scene one", "{FieldNames.TEXT}": "Text..."}}
     ]
-}
+}}
 ```"""
 
         agent = SceneSplitterAgent(llm_client=mock_llm, max_retries=1)
@@ -118,7 +119,7 @@ class TestSceneSplitterAgent:
         self, mock_llm: AsyncMock, sample_story_input: StoryInput
     ) -> None:
         """Test that empty scenes list raises error."""
-        mock_llm.complete.return_value = '{"scenes": []}'
+        mock_llm.complete.return_value = f'{{"{FieldNames.SCENES}": []}}'
 
         agent = SceneSplitterAgent(llm_client=mock_llm, max_retries=0)
         with pytest.raises(RetryExhaustedError):
@@ -138,24 +139,24 @@ class TestShotPlannerAgent:
         self, mock_llm: AsyncMock, sample_scene: Scene
     ) -> None:
         """Test successful shot planning."""
-        mock_llm.complete.return_value = """{
-            "shots": [
-                {
-                    "id": 1,
-                    "description": "Wide shot of village well",
-                    "duration": 5,
-                    "shot_type": "wide",
-                    "dialogue": null
-                },
-                {
-                    "id": 2,
-                    "description": "Close-up of wizard's face",
-                    "duration": 7,
-                    "shot_type": "close_up",
-                    "dialogue": "There is a dragon..."
-                }
+        mock_llm.complete.return_value = f"""{{
+            "{FieldNames.SHOTS}": [
+                {{
+                    "{FieldNames.ID}": 1,
+                    "{FieldNames.DESCRIPTION}": "Wide shot of village well",
+                    "{FieldNames.DURATION}": 5,
+                    "{FieldNames.SHOT_TYPE}": "wide",
+                    "{FieldNames.DIALOGUE}": null
+                }},
+                {{
+                    "{FieldNames.ID}": 2,
+                    "{FieldNames.DESCRIPTION}": "Close-up of wizard's face",
+                    "{FieldNames.DURATION}": 7,
+                    "{FieldNames.SHOT_TYPE}": "close_up",
+                    "{FieldNames.DIALOGUE}": "There is a dragon..."
+                }}
             ]
-        }"""
+        }}"""
 
         agent = ShotPlannerAgent(llm_client=mock_llm, max_retries=1)
         result = await agent.run(sample_scene)
@@ -171,13 +172,13 @@ class TestShotPlannerAgent:
         self, mock_llm: AsyncMock, sample_scene: Scene
     ) -> None:
         """Test various shot type string formats are parsed correctly."""
-        mock_llm.complete.return_value = """{
-            "shots": [
-                {"id": 1, "description": "test", "duration": 5, "shot_type": "close-up"},
-                {"id": 2, "description": "test", "duration": 5, "shot_type": "WIDE"},
-                {"id": 3, "description": "test", "duration": 5, "shot_type": null}
+        mock_llm.complete.return_value = f"""{{
+            "{FieldNames.SHOTS}": [
+                {{{FieldNames.ID}: 1, "{FieldNames.DESCRIPTION}": "test", "{FieldNames.DURATION}": 5, "{FieldNames.SHOT_TYPE}": "close-up"}},
+                {{{FieldNames.ID}: 2, "{FieldNames.DESCRIPTION}": "test", "{FieldNames.DURATION}": 5, "{FieldNames.SHOT_TYPE}": "WIDE"}},
+                {{{FieldNames.ID}: 3, "{FieldNames.DESCRIPTION}": "test", "{FieldNames.DURATION}": 5, "{FieldNames.SHOT_TYPE}": null}}
             ]
-        }"""
+        }}"""
 
         agent = ShotPlannerAgent(llm_client=mock_llm, max_retries=1)
         result = await agent.run(sample_scene)

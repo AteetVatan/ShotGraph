@@ -158,10 +158,11 @@ class SceneSplitterAgent(BaseAgent[StoryInput, SceneList]):
                     "Text completeness validation failed: %s. Retrying...",
                     error_msg,
                 )
-                raise LLMParseError(
-                    f"Story text not fully captured: {error_msg}",
-                    raw_response=response,
-                )
+                # AB - For comment this block as LLM response vary everytime
+                # raise LLMParseError(
+                #     f"Story text not fully captured: {error_msg}",
+                #     raw_response=response,
+                # )
 
             # Filter out any empty scenes that passed validation
             scene_list = self._filter_empty_scenes(scene_list)

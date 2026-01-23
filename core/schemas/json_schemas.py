@@ -2,7 +2,8 @@
 
 from typing import Any
 
-from core.models import Scene, SceneList, Shot
+from core.constants import FieldNames, NullValues, SHOT_TYPE_MAPPING
+from core.models import Scene, SceneList, Shot, ShotType
 
 
 def get_scene_list_schema() -> dict[str, Any]:
@@ -14,20 +15,20 @@ def get_scene_list_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "scenes": {
+            FieldNames.SCENES: {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "id": {"type": "integer"},
-                        "summary": {"type": "string"},
-                        "text": {"type": "string"},
+                        FieldNames.ID: {"type": "integer"},
+                        FieldNames.SUMMARY: {"type": "string"},
+                        FieldNames.TEXT: {"type": "string"},
                     },
-                    "required": ["id", "summary", "text"],
+                    "required": [FieldNames.ID, FieldNames.SUMMARY, FieldNames.TEXT],
                 },
             }
         },
-        "required": ["scenes"],
+        "required": [FieldNames.SCENES],
     }
 
 
@@ -37,28 +38,31 @@ def get_shot_list_schema() -> dict[str, Any]:
     Returns:
         JSON schema dictionary compatible with Together.ai structured outputs.
     """
+    # Build enum list from mapping keys
+    shot_type_enum = list(SHOT_TYPE_MAPPING.keys()) + [None]
+    
     return {
         "type": "object",
         "properties": {
-            "shots": {
+            FieldNames.SHOTS: {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "id": {"type": "integer"},
-                        "description": {"type": "string"},
-                        "duration": {"type": "number", "minimum": 1.0, "maximum": 30.0},
-                        "shot_type": {
+                        FieldNames.ID: {"type": "integer"},
+                        FieldNames.DESCRIPTION: {"type": "string"},
+                        FieldNames.DURATION: {"type": "number", "minimum": 1.0, "maximum": 30.0},
+                        FieldNames.SHOT_TYPE: {
                             "type": "string",
-                            "enum": ["wide", "medium", "close_up", "close-up", "closeup", "establishing", None],
+                            "enum": shot_type_enum,
                         },
-                        "dialogue": {"type": ["string", "null"]},
+                        FieldNames.DIALOGUE: {"type": ["string", "null"]},
                     },
-                    "required": ["id", "description"],
+                    "required": [FieldNames.ID, FieldNames.DESCRIPTION],
                 },
             }
         },
-        "required": ["shots"],
+        "required": [FieldNames.SHOTS],
     }
 
 
@@ -76,16 +80,16 @@ def validate_scene_list(data: dict[str, Any]) -> SceneList:
     """
     from core.models import Scene
 
-    scenes_data = data.get("scenes", [])
+    scenes_data = data.get(FieldNames.SCENES, [])
     if not scenes_data:
         raise ValueError("No scenes found in data")
 
     scenes = []
     for scene_data in scenes_data:
         scene = Scene(
-            id=scene_data["id"],
-            summary=scene_data["summary"],
-            text=scene_data["text"],
+            id=scene_data[FieldNames.ID],
+            summary=scene_data[FieldNames.SUMMARY],
+            text=scene_data[FieldNames.TEXT],
         )
         scenes.append(scene)
 
@@ -105,38 +109,30 @@ def validate_shot_list(data: dict[str, Any], scene_id: int) -> list[Shot]:
     Raises:
         ValueError: If data doesn't match schema.
     """
-    from core.models import Shot, ShotType
+    from core.models import Shot
 
-    shots_data = data.get("shots", [])
+    shots_data = data.get(FieldNames.SHOTS, [])
     if not shots_data:
         raise ValueError("No shots found in data")
 
     shots = []
     for shot_data in shots_data:
         # Map shot_type string to enum
-        shot_type_str = shot_data.get("shot_type")
+        shot_type_str = shot_data.get(FieldNames.SHOT_TYPE)
         shot_type = None
         if shot_type_str:
-            mapping = {
-                "wide": ShotType.WIDE,
-                "medium": ShotType.MEDIUM,
-                "close_up": ShotType.CLOSE_UP,
-                "close-up": ShotType.CLOSE_UP,
-                "closeup": ShotType.CLOSE_UP,
-                "establishing": ShotType.ESTABLISHING,
-            }
-            shot_type = mapping.get(shot_type_str.lower())
+            shot_type = SHOT_TYPE_MAPPING.get(shot_type_str.lower())
 
         # Handle null dialogue
-        dialogue = shot_data.get("dialogue")
-        if dialogue in ("null", "None", None):
+        dialogue = shot_data.get(FieldNames.DIALOGUE)
+        if dialogue in (NullValues.NULL, NullValues.NONE, None):
             dialogue = None
 
         shot = Shot(
-            id=shot_data["id"],
+            id=shot_data[FieldNames.ID],
             scene_id=scene_id,
-            description=shot_data["description"],
-            duration_seconds=float(shot_data.get("duration", 5.0)),
+            description=shot_data[FieldNames.DESCRIPTION],
+            duration_seconds=float(shot_data.get(FieldNames.DURATION, 5.0)),
             shot_type=shot_type,
             dialogue=dialogue,
             subtitle_text=dialogue,

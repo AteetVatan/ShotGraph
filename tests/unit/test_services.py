@@ -1,6 +1,8 @@
 """Unit tests for service implementations."""
 
 import pytest
+
+from core.constants import FieldNames
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -130,10 +132,10 @@ class TestMockLLMClient:
         )
 
         data = json.loads(response)
-        assert "scenes" in data
-        assert len(data["scenes"]) > 0
-        assert "id" in data["scenes"][0]
-        assert "summary" in data["scenes"][0]
+        assert FieldNames.SCENES in data
+        assert len(data[FieldNames.SCENES]) > 0
+        assert FieldNames.ID in data[FieldNames.SCENES][0]
+        assert FieldNames.SUMMARY in data[FieldNames.SCENES][0]
 
     @pytest.mark.asyncio
     async def test_returns_shot_response_for_director_prompt(self) -> None:
@@ -148,10 +150,10 @@ class TestMockLLMClient:
         )
 
         data = json.loads(response)
-        assert "shots" in data
-        assert len(data["shots"]) > 0
-        assert "id" in data["shots"][0]
-        assert "description" in data["shots"][0]
+        assert FieldNames.SHOTS in data
+        assert len(data[FieldNames.SHOTS]) > 0
+        assert FieldNames.ID in data[FieldNames.SHOTS][0]
+        assert FieldNames.DESCRIPTION in data[FieldNames.SHOTS][0]
 
 
 class TestTogetherLLMClient:

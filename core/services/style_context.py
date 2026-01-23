@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from core.constants import FieldNames
+
 if TYPE_CHECKING:
     from core.models import Scene, Shot, StoryEntities
 
@@ -125,10 +127,10 @@ class StyleContextManager:
             mood: Scene mood/atmosphere.
         """
         self._scene_settings[scene_id] = {
-            "setting": setting,
-            "time_of_day": time_of_day,
-            "weather": weather,
-            "mood": mood,
+            FieldNames.SETTING: setting,
+            FieldNames.TIME_OF_DAY: time_of_day,
+            FieldNames.WEATHER: weather,
+            FieldNames.MOOD: mood,
         }
 
     def record_shot(
@@ -147,10 +149,10 @@ class StyleContextManager:
             visual_style: Visual style description used.
         """
         self._shot_history.append({
-            "scene_id": scene_id,
+            FieldNames.SCENE_ID: scene_id,
             "shot_index": shot_index,
-            "summary": summary,
-            "visual_style": visual_style,
+            FieldNames.SUMMARY: summary,
+            FieldNames.VISUAL_STYLE: visual_style,
         })
 
     def build_context_for_shot(
@@ -178,8 +180,8 @@ class StyleContextManager:
         
         if self._shot_history:
             last_shot = self._shot_history[-1]
-            previous_summary = last_shot.get("summary")
-            previous_style = last_shot.get("visual_style")
+            previous_summary = last_shot.get(FieldNames.SUMMARY)
+            previous_style = last_shot.get(FieldNames.VISUAL_STYLE)
 
         # Build character context (filter to characters likely in this scene)
         char_context = {}
@@ -198,10 +200,10 @@ class StyleContextManager:
             scene_id=scene_id,
             shot_index=shot_index,
             characters=char_context,
-            setting=scene_setting.get("setting", ""),
-            time_of_day=scene_setting.get("time_of_day", ""),
-            weather=scene_setting.get("weather", ""),
-            mood=scene_setting.get("mood", ""),
+            setting=scene_setting.get(FieldNames.SETTING, ""),
+            time_of_day=scene_setting.get(FieldNames.TIME_OF_DAY, ""),
+            weather=scene_setting.get(FieldNames.WEATHER, ""),
+            mood=scene_setting.get(FieldNames.MOOD, ""),
             previous_shot_summary=previous_summary,
             previous_shot_visual_style=previous_style,
             seed=shot_seed,

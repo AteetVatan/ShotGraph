@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from config.prompt_loader import PromptName, load_prompt
+from core.constants import SchemaType
 from core.exceptions import LLMParseError
 from core.protocols.llm_client import ILLMClient
 from core.schemas.json_schemas import get_scene_list_schema, get_shot_list_schema
@@ -23,7 +24,10 @@ class JSONRepairInput(BaseModel):
     """Input model for JSON repair."""
 
     malformed_json: str = Field(..., description="Malformed JSON string to repair")
-    schema_type: str = Field(default="scene_list", description="Type of schema to use")
+    schema_type: str = Field(
+        default=SchemaType.SCENE_LIST.value,
+        description="Type of schema to use",
+    )
 
 
 class JSONRepairAgent(BaseAgent[JSONRepairInput, dict[str, Any]]):
@@ -57,9 +61,9 @@ class JSONRepairAgent(BaseAgent[JSONRepairInput, dict[str, Any]]):
             LLMParseError: If repair fails.
         """
         # Get appropriate schema
-        if input_data.schema_type == "scene_list":
+        if input_data.schema_type == SchemaType.SCENE_LIST.value:
             json_schema = get_scene_list_schema()
-        elif input_data.schema_type == "shot_list":
+        elif input_data.schema_type == SchemaType.SHOT_LIST.value:
             json_schema = get_shot_list_schema()
         else:
             raise ValueError(f"Unknown schema type: {input_data.schema_type}")
