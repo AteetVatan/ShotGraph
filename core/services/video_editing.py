@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from core.constants import FRAME_SAFETY_FRAME_COUNT, FRAME_SAFETY_MIN_OFFSET
 from core.exceptions import CompositionError
 
 if TYPE_CHECKING:
@@ -64,6 +65,37 @@ class VideoEditor:
             from core.services.video_effects import VideoEffects
             self._video_effects = VideoEffects(self._settings)
         return self._video_effects
+
+    def _load_clip_safely(self, clip_path: Path) -> Any:
+        """Load video clip with safe margin trimming to avoid corrupt last frames.
+
+        AI-generated videos often have incomplete/corrupt final frames due to
+        H.264 encoding not properly closing the last GOP. This method trims
+        a small safety margin from the end to prevent ffmpeg read warnings.
+
+        Args:
+            clip_path: Path to the video file.
+
+        Returns:
+            VideoFileClip with safe end trimming applied.
+        """
+        from moviepy import VideoFileClip
+
+        clip = VideoFileClip(str(clip_path))
+
+        if not self._settings.video_trim_corrupt_frames:
+            return clip
+
+        safe_margin = max(
+            FRAME_SAFETY_MIN_OFFSET,
+            FRAME_SAFETY_FRAME_COUNT / (clip.fps or self._fps),
+        )
+
+        # Only trim if clip is long enough (avoid over-trimming short clips)
+        if clip.duration > safe_margin * 2:
+            return clip.subclipped(0, clip.duration - safe_margin)
+
+        return clip
 
     def _apply_volume(self, audio_clip: Any, volume: float) -> Any:
         """Apply volume adjustment to audio clip.
@@ -254,7 +286,20 @@ class VideoEditor:
                     logger.warning("Video clip not found: %s", clip_path)
                     continue
 
-                video = VideoFileClip(str(clip_path))
+                video = self._load_clip_safely(clip_path)
+
+                # Normalize resolution if different from target to prevent concat artifacts
+                if (video.w, video.h) != self._resolution:
+                    logger.warning(
+                        "Resizing clip %s from %dx%d to %dx%d",
+                        clip_path.name,
+                        video.w,
+                        video.h,
+                        self._resolution[0],
+                        self._resolution[1],
+                    )
+                    video = video.resize(self._resolution)
+
                 clip_start_times.append(total_duration)
 
                 # Add audio track if provided
@@ -635,10 +680,18 @@ class VideoEditor:
             # Insert interpolated transition between clips
             if i < len(clips) - 1:
                 try:
-                    # Get last frame of current clip
-                    last_frame = clip.get_frame(clip.duration - 0.1)
-                    # Get first frame of next clip
-                    first_frame = clips[i + 1].get_frame(0.1)
+                    # Use fps-based safe margin to avoid corrupt boundary frames
+                    safe_offset = max(
+                        FRAME_SAFETY_MIN_OFFSET,
+                        FRAME_SAFETY_FRAME_COUNT / self._fps,
+                    )
+                    # Get last frame of current clip (safe access)
+                    last_frame_time = max(0, clip.duration - safe_offset)
+                    last_frame = clip.get_frame(last_frame_time)
+                    # Get first frame of next clip (safe access)
+                    next_clip = clips[i + 1]
+                    first_frame_time = min(safe_offset, next_clip.duration * 0.5)
+                    first_frame = next_clip.get_frame(first_frame_time)
                     
                     # Generate interpolated frames
                     interp_frames = effects.interpolate_frames(
@@ -723,7 +776,13 @@ class VideoEditor:
             from PIL import Image
 
             clip = VideoFileClip(str(video_path))
-            frame = clip.get_frame(min(time, clip.duration - 0.1))
+            # Use safe margin to avoid corrupt boundary frames
+            safe_margin = max(
+                FRAME_SAFETY_MIN_OFFSET,
+                FRAME_SAFETY_FRAME_COUNT / (clip.fps or self._fps),
+            )
+            safe_time = min(time, clip.duration - safe_margin)
+            frame = clip.get_frame(max(0, safe_time))
             clip.close()
 
             Image.fromarray(frame).save(output_path)

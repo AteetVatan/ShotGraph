@@ -65,3 +65,9 @@ SHOT_TYPE_MAPPING: Final[dict[str, ShotType]] = {
     "closeup": ShotType.CLOSE_UP,
     "establishing": ShotType.ESTABLISHING,
 }
+
+
+# Video frame safety margins
+# Used to avoid reading corrupt/incomplete last frames from AI-generated videos
+FRAME_SAFETY_MIN_OFFSET: Final[float] = 0.05  # minimum 50ms from boundary
+FRAME_SAFETY_FRAME_COUNT: Final[int] = 2  # at least N frames back from boundary

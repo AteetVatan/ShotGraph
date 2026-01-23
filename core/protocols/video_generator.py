@@ -1,7 +1,22 @@
 """Protocol for video generator interface."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+
+@dataclass
+class VideoGenerationResult:
+    """Result of video generation containing path and actual duration.
+
+    Attributes:
+        path: Path to the generated video file.
+        actual_duration: The actual duration of the generated video in seconds.
+            This may differ from the requested duration due to frame limits.
+    """
+
+    path: Path
+    actual_duration: float
 
 
 class IVideoGenerator(Protocol):
@@ -14,7 +29,7 @@ class IVideoGenerator(Protocol):
         duration_seconds: float,
         init_image: Path | None = None,
         seed: int | None = None,
-    ) -> Path:
+    ) -> VideoGenerationResult:
         """Generate a video clip from a text prompt.
 
         Args:
@@ -24,7 +39,7 @@ class IVideoGenerator(Protocol):
             seed: Optional random seed for reproducibility.
 
         Returns:
-            Path to the generated video file.
+            VideoGenerationResult containing path and actual duration.
 
         Raises:
             VideoGenerationError: If generation fails.

@@ -163,6 +163,10 @@ class Settings(BaseSettings):
         le=0.5,
         description="Maximum zoom amount for Ken Burns effect (0.2 = 20%)",
     )
+    video_trim_corrupt_frames: bool = Field(
+        default=True,
+        description="Trim potentially corrupt last frames from AI-generated videos during composition",
+    )
 
     # TTS Configuration
     tts_voice_en: str = Field(

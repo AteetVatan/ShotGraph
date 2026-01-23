@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.constants import FRAME_SAFETY_FRAME_COUNT, FRAME_SAFETY_MIN_OFFSET
 from core.models import Shot
 from core.protocols.video_generator import IVideoGenerator
 
@@ -92,19 +93,29 @@ class VideoGenerationAgent(BaseAgent[Shot, Path]):
             hints = self._style_ctx.get_video_generation_hints(ctx)
             seed = hints.get("seed")
 
-        video_path = self._generator.generate(
+        requested_duration = shot.duration_seconds
+        result = self._generator.generate(
             prompt=prompt,
-            duration_seconds=shot.duration_seconds,
+            duration_seconds=requested_duration,
             init_image=self._last_frame,
             seed=seed,
         )
 
+        # CRITICAL: Update shot with actual generated duration
+        if result.actual_duration != requested_duration:
+            self.logger.info(
+                "Duration reconciled: requested %.2fs, actual %.2fs",
+                requested_duration,
+                result.actual_duration,
+            )
+        shot.duration_seconds = result.actual_duration
+
         # Cache last frame for continuity
-        self._last_frame = self._extract_last_frame(video_path)
+        self._last_frame = self._extract_last_frame(result.path)
         self._shot_index += 1
 
-        self.logger.info("Generated video: %s", video_path)
-        return video_path
+        self.logger.info("Generated video: %s", result.path)
+        return result.path
 
     def _build_enhanced_prompt(self, shot: Shot) -> str:
         """Build enhanced prompt with style context.
@@ -146,15 +157,19 @@ class VideoGenerationAgent(BaseAgent[Shot, Path]):
             from PIL import Image
 
             clip = VideoFileClip(str(video_path))
-            # Get frame slightly before end to avoid black frames
-            frame_time = max(0, clip.duration - 0.1)
+            # Use fps-based safe margin to avoid corrupt boundary frames
+            safe_offset = max(
+                FRAME_SAFETY_MIN_OFFSET,
+                FRAME_SAFETY_FRAME_COUNT / clip.fps if clip.fps > 0 else FRAME_SAFETY_MIN_OFFSET,
+            )
+            frame_time = max(0, clip.duration - safe_offset)
             frame = clip.get_frame(frame_time)
             clip.close()
 
             frame_path = video_path.with_suffix(".last_frame.png")
             Image.fromarray(frame).save(frame_path)
 
-            self.logger.debug("Extracted last frame: %s", frame_path)
+            self.logger.debug("Extracted last frame at %.3fs: %s", frame_time, frame_path)
             return frame_path
 
         except Exception as e:
