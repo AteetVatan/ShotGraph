@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -64,6 +64,64 @@ class VideoEditor:
             from core.services.video_effects import VideoEffects
             self._video_effects = VideoEffects(self._settings)
         return self._video_effects
+
+    def _audio_fadein(self, audio_clip: Any, duration: float) -> Any:
+        """Apply fade-in effect to audio clip.
+
+        Args:
+            audio_clip: Audio clip to fade in.
+            duration: Fade duration in seconds.
+
+        Returns:
+            Audio clip with fade-in applied.
+        """
+        try:
+            from moviepy.audio.fx import AudioFadeIn
+            if hasattr(audio_clip, 'with_effects'):
+                return audio_clip.with_effects([AudioFadeIn(duration=duration)])
+            return AudioFadeIn(duration=duration).apply(audio_clip)
+        except (ImportError, AttributeError):
+            try:
+                from moviepy.audio.fx import audio_fadein
+                return audio_fadein(audio_clip, duration)
+            except (ImportError, AttributeError):
+                if hasattr(audio_clip, 'audio_fadein'):
+                    return audio_clip.audio_fadein(duration)
+                # Manual fade-in using volume envelope
+                return audio_clip.volumex(
+                    lambda t: min(1.0, t / duration) if t < duration else 1.0
+                )
+
+    def _audio_fadeout(self, audio_clip: Any, duration: float) -> Any:
+        """Apply fade-out effect to audio clip.
+
+        Args:
+            audio_clip: Audio clip to fade out.
+            duration: Fade duration in seconds.
+
+        Returns:
+            Audio clip with fade-out applied.
+        """
+        try:
+            from moviepy.audio.fx import AudioFadeOut
+            if hasattr(audio_clip, 'with_effects'):
+                return audio_clip.with_effects([AudioFadeOut(duration=duration)])
+            return AudioFadeOut(duration=duration).apply(audio_clip)
+        except (ImportError, AttributeError):
+            try:
+                from moviepy.audio.fx import audio_fadeout
+                return audio_fadeout(audio_clip, duration)
+            except (ImportError, AttributeError):
+                if hasattr(audio_clip, 'audio_fadeout'):
+                    return audio_clip.audio_fadeout(duration)
+                # Manual fade-out using volume envelope
+                clip_duration = audio_clip.duration
+                return audio_clip.volumex(
+                    lambda t: max(
+                        0.0,
+                        1.0 - (t - (clip_duration - duration)) / duration
+                    ) if t > clip_duration - duration else 1.0
+                )
 
     def compose_video(
         self,
@@ -280,12 +338,67 @@ class VideoEditor:
         except Exception as e:
             raise CompositionError(f"Video composition failed: {e}", stage="composition") from e
 
+    def _load_and_loop_audio(
+        self, audio_path: Path, target_duration: float
+    ) -> Any | None:
+        """Load audio file and loop or trim to target duration.
+
+        Args:
+            audio_path: Path to audio file.
+            target_duration: Target duration in seconds.
+
+        Returns:
+            Audio clip (looped or trimmed) or None on failure.
+        """
+        from moviepy import AudioFileClip, concatenate_audioclips
+        from moviepy.audio.fx import AudioLoop
+
+        try:
+            audio = AudioFileClip(str(audio_path))
+            if audio.duration < target_duration:
+                try:
+                    if hasattr(audio, 'with_effects'):
+                        audio = audio.with_effects([AudioLoop(duration=target_duration)])
+                    else:
+                        audio = audio.fx(AudioLoop, duration=target_duration)
+                except (AttributeError, TypeError):
+                    loops_needed = int(target_duration / audio.duration) + 1
+                    audio = concatenate_audioclips([audio] * loops_needed).subclip(
+                        0, target_duration
+                    )
+            else:
+                audio = audio.subclip(0, target_duration)
+            return audio
+        except (IOError, AttributeError, TypeError) as e:
+            logger.warning("Failed to load/loop audio %s: %s", audio_path, e)
+            return None
+
+    def _apply_audio_crossfades(
+        self, audio_clip: Any, fade_in: bool, fade_out: bool, duration: float
+    ) -> Any:
+        """Apply fade in/out effects to audio clip.
+
+        Args:
+            audio_clip: Audio clip to modify.
+            fade_in: Whether to apply fade-in.
+            fade_out: Whether to apply fade-out.
+            duration: Fade duration in seconds.
+
+        Returns:
+            Audio clip with fades applied.
+        """
+        if fade_in:
+            audio_clip = self._audio_fadein(audio_clip, duration)
+        if fade_out:
+            audio_clip = self._audio_fadeout(audio_clip, duration)
+        return audio_clip
+
     def _mix_scene_music(
         self,
         scene_tracks: list[SceneMusicTrack],
         total_duration: float,
         crossfade_duration: float = 1.0,
-    ):
+    ) -> Any | None:
         """Mix multiple scene music tracks with crossfades.
 
         Args:
@@ -296,15 +409,12 @@ class VideoEditor:
         Returns:
             Combined audio clip with crossfaded music.
         """
-        from moviepy import AudioFileClip, CompositeAudioClip, concatenate_audioclips
-        from moviepy.audio.fx import AudioLoop
+        from moviepy import CompositeAudioClip
 
         if not scene_tracks:
             return None
 
-        # Sort by start time
         scene_tracks = sorted(scene_tracks, key=lambda x: x.start_time)
-
         audio_clips = []
 
         for i, track in enumerate(scene_tracks):
@@ -312,47 +422,22 @@ class VideoEditor:
                 logger.warning("Scene music not found: %s", track.path)
                 continue
 
-            try:
-                audio = AudioFileClip(str(track.path))
-                scene_duration = track.end_time - track.start_time
-
-                # Loop or trim to fit scene duration
-                if audio.duration < scene_duration:
-                    # Loop the music - handle different MoviePy versions
-                    try:
-                        # MoviePy v2.x: use with_effects with list
-                        if hasattr(audio, 'with_effects'):
-                            audio = audio.with_effects([AudioLoop(duration=scene_duration)])
-                        else:
-                            # MoviePy v1.x: use fx method
-                            audio = audio.fx(AudioLoop, duration=scene_duration)
-                    except (AttributeError, TypeError):
-                        # Fallback: manually loop by concatenating
-                        loops_needed = int(scene_duration / audio.duration) + 1
-                        audio = concatenate_audioclips([audio] * loops_needed).subclip(0, scene_duration)
-                else:
-                    audio = audio.subclip(0, scene_duration)
-
-                # Apply fade in/out for crossfade effect
-                if i > 0:
-                    # Fade in at start (except first track)
-                    audio = audio.audio_fadein(crossfade_duration)
-                if i < len(scene_tracks) - 1:
-                    # Fade out at end (except last track)
-                    audio = audio.audio_fadeout(crossfade_duration)
-
-                # Set start time
-                audio = audio.set_start(track.start_time)
-                audio_clips.append(audio)
-
-            except Exception as e:
-                logger.warning("Failed to load scene music %s: %s", track.path, e)
+            scene_duration = track.end_time - track.start_time
+            audio = self._load_and_loop_audio(track.path, scene_duration)
+            if audio is None:
                 continue
+
+            fade_in = i > 0
+            fade_out = i < len(scene_tracks) - 1
+            audio = self._apply_audio_crossfades(
+                audio, fade_in, fade_out, crossfade_duration
+            )
+            audio = audio.set_start(track.start_time)
+            audio_clips.append(audio)
 
         if not audio_clips:
             return None
 
-        # Composite all audio tracks (they may overlap during crossfades)
         return CompositeAudioClip(audio_clips)
 
     def _apply_audio_ducking(
