@@ -109,3 +109,4 @@ temp/
 
 # Cursor/IDE plans
 .cursor/
+.agent/
